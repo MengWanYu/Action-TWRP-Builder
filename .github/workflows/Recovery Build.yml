@@ -6,37 +6,43 @@ on:
       MANIFEST_URL:
         description: 'MANIFEST_URL (if want to use SSH keys, use git@github.com:XXXXX)'
         required: true
-        default: 'https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp'
+        default: 'https://github.com/minimal-manifest-twrp/platform_manifest_twrp_omni'
       MANIFEST_BRANCH:
         description: 'MANIFEST_BRANCH'
         required: true
-        default: 'twrp-12.1'
+        default: 'twrp-5.1'
       DEVICE_TREE_URL:
         description: 'DEVICE_TREE_URL'
         required: true
-        default: 'https://github.com/TeamWin/android_device_asus_I003D'
+        default: 'https://github.com/MengWanYu/android_device_Allwinner_READBOY/tree/main'
       DEVICE_TREE_BRANCH:
         description: 'DEVICE_TREE_BRANCH'
         required: true
-        default: 'android-12.1'
+        default: 'main'
       DEVICE_PATH:
         description: 'DEVICE_PATH'
         required: true
-        default: 'device/asus/I003D'
+        default: 'device/Allwinner/READBOY'
       COMMON_TREE_URL:
         description: 'COMMON_TREE_URL (if no common tree, leave blank)'
         required: false
+        default: ''
+      COMMON_TREE_BRANCH:
+        description: 'COMMON_TREE_BRANCH (if cloning a specific branch for common tree; leave blank to use default)'
+        required: false
+        default: ''
       COMMON_PATH:
         description: 'COMMON_PATH (if no common tree, leave blank)'
         required: false
+        default: ''
       DEVICE_NAME:
         description: 'DEVICE_NAME'
         required: true
-        default: 'I003D'
+        default: 'READBOY'
       MAKEFILE_NAME:
         description: 'MAKEFILE_NAME'
         required: true
-        default: 'twrp_I003D'
+        default: 'omni_READBOY'
       BUILD_TARGET:
         description: 'BUILD_TARGET'
         required: true
@@ -109,8 +115,8 @@ jobs:
       id: pwd
       run: |
         set -e
-        mkdir workspace
-        cd "${{ steps.pwd.outputs.workspace-folder }}"
+        mkdir -p workspace
+        cd workspace
         # 输出 workspace 路径供后续步骤使用
         echo "workspace-folder=$(pwd)" >> $GITHUB_OUTPUT
 
@@ -154,6 +160,7 @@ jobs:
     - name: Clone device tree
       run: |
         set -e
+        cd "${{ steps.pwd.outputs.workspace-folder }}"
         echo "克隆设备树：${{ github.event.inputs.DEVICE_TREE_URL }} @ ${{ github.event.inputs.DEVICE_TREE_BRANCH }}"
         git clone "${{ github.event.inputs.DEVICE_TREE_URL }}" -b "${{ github.event.inputs.DEVICE_TREE_BRANCH }}" "./${{ github.event.inputs.DEVICE_PATH }}" || {
           echo "错误：克隆设备树失败（请检查 URL / 分支）。"
@@ -165,9 +172,18 @@ jobs:
       if: ${{ github.event.inputs.COMMON_TREE_URL != '' && github.event.inputs.COMMON_PATH != '' }}
       run: |
         set -e
-        git clone "${{ github.event.inputs.COMMON_TREE_URL }}" -b "${{ github.event.inputs.DEVICE_TREE_BRANCH }}" "./${{ github.event.inputs.COMMON_PATH }}" || {
-          echo "警告：克隆 common tree 失败（若无 common tree 可忽略）"
-        }
+        cd "${{ steps.pwd.outputs.workspace-folder }}"
+        if [ "${{ github.event.inputs.COMMON_TREE_BRANCH }}" != "" ]; then
+          echo "克隆 common tree：${{ github.event.inputs.COMMON_TREE_URL }} @ ${{ github.event.inputs.COMMON_TREE_BRANCH }}"
+          git clone "${{ github.event.inputs.COMMON_TREE_URL }}" -b "${{ github.event.inputs.COMMON_TREE_BRANCH }}" "./${{ github.event.inputs.COMMON_PATH }}" || {
+            echo "警告：克隆 common tree 失败（若无 common tree 可忽略）"
+          }
+        else
+          echo "克隆 common tree（默认分支）：${{ github.event.inputs.COMMON_TREE_URL }}"
+          git clone "${{ github.event.inputs.COMMON_TREE_URL }}" "./${{ github.event.inputs.COMMON_PATH }}" || {
+            echo "警告：克隆 common tree 失败（若无 common tree 可忽略）"
+          }
+        fi
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
     - name: Check Build Tree
@@ -183,9 +199,9 @@ jobs:
         set -e
         cd "${{ steps.pwd.outputs.workspace-folder }}"
         if [ -f "${GITHUB_WORKSPACE}/scripts/convert.sh" ]; then
-          bash ${GITHUB_WORKSPACE}/scripts/convert.sh "${{ github.event.inputs.DEVICE_PATH }}/${{ steps.buildtree.outputs.value }}.dependencies" || echo "convert.sh 返回非0"
+          bash "${GITHUB_WORKSPACE}/scripts/convert.sh" "${{ github.event.inputs.DEVICE_PATH }}/${{ steps.buildtree.outputs.value }}.dependencies" || echo "convert.sh 返回非0"
         else
-          echo "警告：scripts/convert.sh 未找到，跳过依赖转换"
+          echo "警告：${GITHUB_WORKSPACE}/scripts/convert.sh 未找到，跳过依赖转换"
         fi
         repo sync -j$(nproc --all) || repo sync -j1 || true
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
@@ -220,13 +236,14 @@ jobs:
         make clean || true
         make "${{ github.event.inputs.BUILD_TARGET }}image" -j$(nproc --all) || { echo "构建失败，请检查日志"; exit 1; }
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+
     - name: Upload to Release
       uses: softprops/action-gh-release@v2
-        with:
+      with:
         files: |
-          workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/${{ github.event.inputs.BUILD_TARGET }}.img
-          workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*.zip
-          workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*vendor*.img
+          ${{ steps.pwd.outputs.workspace-folder }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/${{ github.event.inputs.BUILD_TARGET }}.img
+          ${{ steps.pwd.outputs.workspace-folder }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*.zip
+          ${{ steps.pwd.outputs.workspace-folder }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*vendor*.img
         name: ${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_id }}
         tag_name: ${{ github.run_id }}
         body: |
@@ -234,4 +251,4 @@ jobs:
           Device: ${{ github.event.inputs.DEVICE_NAME }}
           Target: ${{ github.event.inputs.BUILD_TARGET }}.img
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}%
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
