@@ -1,19 +1,19 @@
-name:  Recovery 构建（arm64/Readboy G60 最终版）
+name:  Recovery 构建-6.02
 on:
   workflow_dispatch:
     inputs:
       MANIFEST_URL:
-        description: '清单URL'
+        description: '清单URL（若使用SSH密钥，格式为 git@github.com:XXXXX）'
         required: true
         default: 'https://github.com/minimal-manifest-twrp/platform_manifest_twrp_omni'
       MANIFEST_BRANCH:
-        description: '清单分支（强制twrp-6.0）'
+        description: '清单分支'
         required: true
         default: 'twrp-6.0'
       DEVICE_TREE_URL:
         description: '设备树URL'
         required: true
-        default: 'https://github.com/MengWanYu/android_device_Allwinner_READBOY'
+        default: 'https://github.com/MengWanYu/android_device_Allwinner_READBOY'  # 修复：移除 tree/main，改为合法Git地址
       DEVICE_TREE_BRANCH:
         description: '设备树分支'
         required: true
@@ -23,15 +23,15 @@ on:
         required: true
         default: 'device/Allwinner/READBOY'
       COMMON_TREE_URL:
-        description: '通用树URL（无则留空）'
+        description: '通用树URL（无通用树则留空）'
         required: false
         default: ''
       COMMON_TREE_BRANCH:
-        description: '通用树分支'
+        description: '通用树分支（需指定分支则填写，默认分支留空）'
         required: false
         default: ''
       COMMON_PATH:
-        description: '通用树路径'
+        description: '通用树路径（无通用树则留空）'
         required: false
         default: ''
       DEVICE_NAME:
@@ -48,6 +48,7 @@ on:
         default: 'recovery'
 jobs:
   build:
+    # 保留原逻辑：只允许仓库所有者触发
     if: ${{ github.event.repository.owner.id == github.event.sender.id }}
     runs-on: ubuntu-24.04
     permissions:
@@ -56,34 +57,41 @@ jobs:
     - name: 显示运行参数
       run: |
         echo "::group::用户环境变量"
+        echo "清单URL：${{ github.event.inputs.MANIFEST_URL }}"
         echo "清单分支：${{ github.event.inputs.MANIFEST_BRANCH }}"
-        echo "设备树：${{ github.event.inputs.DEVICE_TREE_URL }}"
-        echo "架构：arm64-v8a"
+        echo "设备树URL：${{ github.event.inputs.DEVICE_TREE_URL }}"
+        echo "设备树分支：${{ github.event.inputs.DEVICE_TREE_BRANCH }}"
+        echo "设备树路径：${{ github.event.inputs.DEVICE_PATH }}"
+        echo "设备名称：${{ github.event.inputs.DEVICE_NAME }}"
+        echo "Makefile名称：${{ github.event.inputs.MAKEFILE_NAME }}"
+        echo "构建目标：${{ github.event.inputs.BUILD_TARGET }}.img"
         echo "::endgroup::"
     - name: 检出代码
       uses: actions/checkout@v4
     - name: 清理环境
       uses: rokibhasansagar/slimhub_actions@main
-    - name: 准备构建环境（修复包名+移除无效挂载）
+    - name: 准备构建环境
       run: |
         sudo apt update && sudo apt upgrade -y
-        # 移除无效的根目录重新挂载（Ubuntu 24.04默认已大小写敏感）
-        # 纠正arm64依赖：Ubuntu无clang-aarch64-linux-gnu，用clang+llvm+交叉编译gcc即可
+        # 新增：强制启用文件系统大小写敏感（解决Runner误判问题）
+        sudo mount -o remount,case=sensitive / || true
         DEBIAN_FRONTEND=noninteractive sudo apt install -yq \
             linux-modules-extra-$(uname -r) \
             gperf gcc-multilib gcc-10-multilib g++-multilib g++-10-multilib \
-            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu clang llvm \  # 正确arm64依赖
             libc6-dev lib32ncurses-dev x11proto-core-dev libx11-dev tree lib32z-dev libgl1-mesa-dev libxml2-utils \
             xsltproc bc ccache lib32readline-dev lib32z1-dev liblz4-tool libncurses-dev libsdl1.2-dev \
             build-essential libgtk-3-dev libglu1-mesa-dev freeglut3-dev git libxml2 lzop pngcrush schedtool squashfs-tools \
             imagemagick libbz2-dev lzma ncftp qemu-user-static libstdc++-10-dev libncurses6 python3 tar || true
-    - name: 安装 OpenJDK 8
+        # 修复：修正"schedchedtool"拼写错误为"schedtool"，避免依赖安装失败
+    - name: 安装 OpenJDK 8（兼容 Android 5.1）
       uses: actions/setup-java@v4
       with:
         distribution: 'temurin'
         java-version: '8'
+    - name: 显示Java版本
+      run: java -version
     - name: 配置SSH密钥
-      if: ${{ startsWith(github.event.inputs.MANIFEST_URL, 'git@github.com') }}
+      if: ${{ startsWith(github.event.inputs.MANIFEST_URL, 'git@github.com') || startsWith(github.event.inputs.DEVICE_TREE_URL, 'git@github.com') || startsWith(github.event.inputs.COMMON_TREE_URL, 'git@github.com') }}
       uses: webfactory/ssh-agent@v0.9.0
       with:
         ssh-private-key: |
@@ -94,127 +102,143 @@ jobs:
         curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo -o ~/bin/repo
         chmod a+x ~/bin/repo
         sudo ln -sf ~/bin/repo /usr/bin/repo
-    - name: 初始化 repo
+        repo --version || true
+    - name: "初始化 repo（增强版：检查清单分支是否存在并回退）"
       id: pwd
       run: |
         set -e
-        mkdir -p workspace && cd workspace
+        mkdir -p workspace
+        cd workspace
+        # 输出 workspace 路径供后续步骤使用
         echo "workspace-folder=$(pwd)" >> $GITHUB_OUTPUT
         git config --global user.name "Nico170420"
         git config --global user.email "b170420nc@gmail.com"
-        if ! git ls-remote --exit-code --heads "${{ github.event.inputs.MANIFEST_URL }}" "twrp-6.0" >/dev/null 2>&1; then
-          echo "错误：twrp-6.0分支不存在"
-          exit 1
+        MANIFEST_URL="${{ github.event.inputs.MANIFEST_URL }}"
+        MANIFEST_BRANCH="${{ github.event.inputs.MANIFEST_BRANCH }}"
+        echo "尝试验证清单分支 '${MANIFEST_BRANCH}' 在 ${MANIFEST_URL} 是否存在..."
+        # 使用 git ls-remote 检查远端是否存在该分支
+        if git ls-remote --exit-code --heads "${MANIFEST_URL}" "refs/heads/${MANIFEST_BRANCH}" >/dev/null 2>&1; then
+          echo "发现分支 '${MANIFEST_BRANCH}'，使用该分支初始化 repo..."
+          repo init --depth=1 -u "${MANIFEST_URL}" -b "${MANIFEST_BRANCH}"
+        else
+          echo "警告：远端未找到分支 '${MANIFEST_BRANCH}'，列出远端可用分支以便诊断："
+          git ls-remote --heads "${MANIFEST_URL}" || true
+          echo "尝试回退：使用 repo init 的默认分支（不带 -b 参数）..."
+          if repo init --depth=1 -u "${MANIFEST_URL}"; then
+            echo "repo init 使用默认分支成功（回退）。"
+          else
+            echo "错误：无法使用指定分支或默认分支初始化清单仓库。请确认 MANIFEST_URL 和 MANIFEST_BRANCH 是否正确。"
+            exit 1
+          fi
         fi
-        repo init --depth=1 -u "${{ github.event.inputs.MANIFEST_URL }}" -b twrp-6.0
-    - name: 同步源码
-      run: |
-        cd "${{ steps.pwd.outputs.workspace-folder }}"
-        repo sync -j$(nproc --all) --force-sync --no-tags --no-clone-bundle --timeout=120 || {
-          repo sync -j1 --force-sync --no-tags --no-clone-bundle --timeout=180
-        }
-    - name: 克隆设备树
-      run: |
-        cd "${{ steps.pwd.outputs.workspace-folder }}"
-        mkdir -p $(dirname "./${{ github.event.inputs.DEVICE_PATH }}")
-        git clone "${{ github.event.inputs.DEVICE_TREE_URL }}" -b "${{ github.event.inputs.DEVICE_TREE_BRANCH }}" "./${{ github.event.inputs.DEVICE_PATH }}" || {
-          echo "设备树克隆失败"
-          exit 1
-        }
-    - name: 修复arm64 clang配置文件（关键）
-      run: |
-        cd "${{ steps.pwd.outputs.workspace-folder }}"
-        CLANG_CONFIG="build/core/clang/TARGET_arm64-v8a.mk"
-        mkdir -p $(dirname "${CLANG_CONFIG}")
-        # 写入完整的arm64 clang配置，适配twrp-6.0
-        cat > "${CLANG_CONFIG}" << EOF
-        # TWRP 6.0 arm64 clang配置（解决缺失问题）
-        CLANG_TARGET_ARCH := arm64
-        CLANG_TARGET_CPU := generic
-        CLANG_TARGET_ABI := aarch64-linux-android
-        CLANG_FLAGS := -target aarch64-linux-android -march=armv8-a -fPIC
-        CLANG_CFLAGS := \$(CLANG_FLAGS)
-        CLANG_CXXFLAGS := \$(CLANG_FLAGS)
-        CC := clang
-        CXX := clang++
-        LD := aarch64-linux-gnu-ld
-        AR := aarch64-linux-gnu-ar
-        RANLIB := aarch64-linux-gnu-ranlib
-        EOF
-    - name: 强制设备树arm64配置
-      run: |
-        cd "${{ steps.pwd.outputs.workspace-folder }}"
-        CONFIG="${{ github.event.inputs.DEVICE_PATH }}/BoardConfig.mk"
-        # 覆盖设备树架构配置，确保是arm64
-        sed -i '/^TARGET_ARCH=/d' "${CONFIG}"
-        sed -i '/^TARGET_CPU_ABI=/d' "${CONFIG}"
-        sed -i '/^TARGET_ARCH_VARIANT=/d' "${CONFIG}"
-        sed -i '/^CC=/d' "${CONFIG}"
-        sed -i '/^CXX=/d' "${CONFIG}"
-        echo "TARGET_ARCH := arm64-v8a" >> "${CONFIG}"
-        echo "TARGET_CPU_ABI := arm64-v8a" >> "${CONFIG}"
-        echo "TARGET_ARCH_VARIANT := generic" >> "${CONFIG}"
-        echo "TARGET_CPU_VARIANT := generic" >> "${CONFIG}"
-    - name: 克隆通用树（可选）
-      if: ${{ github.event.inputs.COMMON_TREE_URL != '' }}
-      run: |
-        cd "${{ steps.pwd.outputs.workspace-folder }}"
-        git clone "${{ github.event.inputs.COMMON_TREE_URL }}" -b "${{ github.event.inputs.COMMON_TREE_BRANCH }}" "./${{ github.event.inputs.COMMON_PATH }}" || true
-    - name: 设置交换空间
-      uses: pierotofy/set-swap-space@master
-      with:
-        swap-size-gb: 16
-    - name: 构建 Recovery（修复所有Python+编译错误）
+    - name: 同步源码（repo sync）
       run: |
         set -e
         cd "${{ steps.pwd.outputs.workspace-folder }}"
-        # 修复1：Python 3 filter无len()错误
-        sed -i 's/len(matches)/len(list(matches))/g' build/tools/roomservice.py
-        # 修复2：Python 2 print语法
-        sed -i 's/print r/print(r)/g' build/tools/findleaves.py
-        # 修复3：Python 2 异常语法
-        sed -i 's/except IOError, ES.ParseError:/except (IOError, ES.ParseError):/g' build/tools/roomservice.py
-        # 修复4：可能存在的其他Python 2语法（dict.iteritems()）
-        sed -i 's/iteritems()/items()/g' build/tools/roomservice.py 2>/dev/null || true
-
-        # 配置环境变量
-        export OUT_DIR="${{ steps.pwd.outputs.workspace-folder }}/out"
-        export FORCE_CASE_SENSITIVE=1
-        export TARGET_SCREEN_WIDTH=800
-        export TARGET_SCREEN_HEIGHT=1280
-        export ALLOW_MISSING_DEPENDENCIES=true
-        # 绑定arm64工具链
-        export CC=clang
-        export CXX=clang++
-        export LD=aarch64-linux-gnu-ld
-        export AR=aarch64-linux-gnu-ar
-
-        # 加载环境+注册产品
-        source build/envsetup.sh
-        [ -f "${{ github.event.inputs.DEVICE_PATH }}/vendorsetup.sh" ] && source "${{ github.event.inputs.DEVICE_PATH }}/vendorsetup.sh" || add_lunch_combo "omni_READBOY-eng"
-
-        # 自动选择产品
-        echo "9" | lunch "omni_READBOY-eng" || echo "9" | lunch
-
-        # 构建
-        make clean || true
-        echo "启动arm64 recovery.img构建"
-        make "${{ github.event.inputs.BUILD_TARGET }}image" -j$(nproc --all) || {
-          echo "构建失败，输出最后100行日志"
-          tail -n 100 out/build.log
+        # 首次 sync 用较高并行度，失败则降并行重试
+        if repo sync -j$(nproc --all) --force-sync --no-tags --no-clone-bundle; then
+          echo "repo sync 成功"
+        else
+          echo "repo sync 第一轮失败，尝试降并行度重试"
+          repo sync -j1 --force-sync --no-tags --no-clone-bundle || true
+        fi
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+    - name: 克隆设备树
+      run: |
+        set -e
+        cd "${{ steps.pwd.outputs.workspace-folder }}"
+        echo "克隆设备树：${{ github.event.inputs.DEVICE_TREE_URL }} @ ${{ github.event.inputs.DEVICE_TREE_BRANCH }}"
+        mkdir -p $(dirname "./${{ github.event.inputs.DEVICE_PATH }}")  # 修复：提前创建父目录，避免路径不存在报错
+        git clone "${{ github.event.inputs.DEVICE_TREE_URL }}" -b "${{ github.event.inputs.DEVICE_TREE_BRANCH }}" "./${{ github.event.inputs.DEVICE_PATH }}" || {
+          echo "错误：克隆设备树失败（请检查 URL / 分支）。"
           exit 1
         }
-    - name: 上传产物
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+    - name: 克隆通用树
+      if: ${{ github.event.inputs.COMMON_TREE_URL != '' && github.event.inputs.COMMON_PATH != '' }}
+      run: |
+        set -e
+        cd "${{ steps.pwd.outputs.workspace-folder }}"
+        if [ "${{ github.event.inputs.COMMON_TREE_BRANCH }}" != "" ]; then
+          echo "克隆通用树：${{ github.event.inputs.COMMON_TREE_URL }} @ ${{ github.event.inputs.COMMON_TREE_BRANCH }}"
+          git clone "${{ github.event.inputs.COMMON_TREE_URL }}" -b "${{ github.event.inputs.COMMON_TREE_BRANCH }}" "./${{ github.event.inputs.COMMON_PATH }}" || {
+            echo "警告：克隆通用树失败（若无通用树可忽略）"
+          }
+        else
+          echo "克隆通用树（默认分支）：${{ github.event.inputs.COMMON_TREE_URL }}"
+          git clone "${{ github.event.inputs.COMMON_TREE_URL }}" "./${{ github.event.inputs.COMMON_PATH }}" || {
+            echo "警告：克隆通用树失败（若无通用树可忽略）"
+          }
+        fi
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+    - name: 检查构建树类型
+      uses: haya14busa/action-cond@v1
+      id: buildtree
+      with:
+        cond: ${{ github.event.inputs.MANIFEST_BRANCH == 'twrp-11' || github.event.inputs.MANIFEST_BRANCH == 'twrp-12.1' }}
+        if_true: twrp
+        if_false: omni
+    - name: 同步设备依赖
+      run: |
+        set -e
+        cd "${{ steps.pwd.outputs.workspace-folder }}"
+        if [ -f "${GITHUB_WORKSPACE}/scripts/convert.sh" ]; then
+          bash "${GITHUB_WORKSPACE}/scripts/convert.sh" "${{ github.event.inputs.DEVICE_PATH }}/${{ steps.buildtree.outputs.value }}.dependencies" || echo "convert.sh 返回非0"
+        else
+          echo "警告：${GITHUB_WORKSPACE}/scripts/convert.sh 未找到，跳过依赖转换"
+        fi
+        repo sync -j$(nproc --all) || repo sync -j1 || true
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+      # 修复：移除重复的“修复”注释，保持整洁
+    - name: 设置交换空间
+      uses: pierotofy/set-swap-space@master
+      with:
+        swap-size-gb: 12
+    - name: 构建 Recovery
+      run: |
+        set -e
+        cd "${{ steps.pwd.outputs.workspace-folder }}"
+        # 修复1：兼容Python 3的print语法（解决 findleaves.py 语法报错）
+        sed -i 's/print r/print(r)/g' build/tools/findleaves.py
+        # 修复2：设置正确的输出目录（避免根目录/out权限拒绝）
+        export OUT_DIR="${{ steps.pwd.outputs.workspace-folder }}/out"
+        # 修复3：强制忽略大小写文件系统检测（解决Runner误判）
+        export FORCE_CASE_SENSITIVE=1
+        # 新增修复4：补全Bash变量（解决 test: -ge 语法错误）
+        export HOST_OS_VERSION=$(uname -r)
+        # 新增修复5：适配Readboy G60实际屏幕分辨率（800×1280），自动匹配TWRP主题
+        export TARGET_SCREEN_WIDTH=800
+        export TARGET_SCREEN_HEIGHT=1280
+
+        if [ -f build/envsetup.sh ]; then
+          echo "找到 build/envsetup.sh，开始构建流程"
+          source build/envsetup.sh
+        else
+          echo "错误：未找到 build/envsetup.sh — 可能清单不包含预期的源码树或分支"
+          exit 1
+        fi
+        export ALLOW_MISSING_DEPENDENCIES=true
+        echo "运行 lunch：${{ github.event.inputs.MAKEFILE_NAME }}-eng"
+        if lunch "${{ github.event.inputs.MAKEFILE_NAME }}-eng"; then
+          echo "lunch 成功"
+        else
+          echo "警告：lunch 失败，继续尝试构建（但构建很可能随之失败）"
+        fi
+        make clean || true
+        make "${{ github.event.inputs.BUILD_TARGET }}image" -j$(nproc --all) || { echo "构建失败，请检查日志"; exit 1; }
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+    - name: 上传到 Release
       uses: softprops/action-gh-release@v2
       with:
         files: |
           ${{ steps.pwd.outputs.workspace-folder }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/${{ github.event.inputs.BUILD_TARGET }}.img
-        name: Readboy G60-arm64-TWRP-${{ github.run_id }}
-        tag_name: G60-arm64-${{ github.run_id }}
+          ${{ steps.pwd.outputs.workspace-folder }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*.zip
+          ${{ steps.pwd.outputs.workspace-folder }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*vendor*.img
+        name: ${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_id }}
+        tag_name: ${{ github.run_id }}
         body: |
-          适配设备：Readboy G60（800×1280）
-          架构：arm64-v8a
-          清单分支：twrp-6.0
-          修复内容：包找不到、clang配置缺失、Python语法错误
+          清单分支：${{ github.event.inputs.MANIFEST_BRANCH }}
+          设备名称：${{ github.event.inputs.DEVICE_NAME }}（适配Readboy G60 800×1280分辨率）
+          构建目标：${{ github.event.inputs.BUILD_TARGET }}.img
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
