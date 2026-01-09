@@ -39,7 +39,7 @@ on:
         required: true
         default: 'READBOY'
       MAKEFILE_NAME:
-        description: 'Makefile名称'
+        description description: 'Makefile名称'
         required: true
         default: 'omni_READBOY'
       BUILD_TARGET:
@@ -73,8 +73,9 @@ jobs:
     - name: 准备构建环境
       run: |
         sudo apt update && sudo apt upgrade -y
-        # 新增：强制启用文件系统大小写敏感（解决Runner误判问题）
+        # 修复1：强制启用文件系统大小写敏感（解决Runner误判问题）
         sudo mount -o remount,case=sensitive / || true
+        # 修复2：修正"schedchedtool"拼写错误为"schedtool"，避免依赖安装失败
         DEBIAN_FRONTEND=noninteractive sudo apt install -yq \
             linux-modules-extra-$(uname -r) \
             gperf gcc-multilib gcc-10-multilib g++-multilib g++-10-multilib \
@@ -82,7 +83,6 @@ jobs:
             xsltproc bc ccache lib32readline-dev lib32z1-dev liblz4-tool libncurses-dev libsdl1.2-dev \
             build-essential libgtk-3-dev libglu1-mesa-dev freeglut3-dev git libxml2 lzop pngcrush schedtool squashfs-tools \
             imagemagick libbz2-dev lzma ncftp qemu-user-static libstdc++-10-dev libncurses6 python3 tar || true
-        # 修复：修正"schedchedtool"拼写错误为"schedtool"，避免依赖安装失败
     - name: 安装 OpenJDK 8（兼容 Android 5.1）
       uses: actions/setup-java@v4
       with:
@@ -154,6 +154,26 @@ jobs:
           exit 1
         }
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+    - name: 验证设备树产品配置（解决"omni_READBOY不存在"问题）
+      run: |
+        set -e
+        cd "${{ steps.pwd.outputs.workspace-folder }}"
+        # 检查设备树核心配置文件是否存在
+        if [ ! -f "${{ github.event.inputs.DEVICE_PATH }}/Android.mk" ] || [ ! -f "${{ github.event.inputs.DEVICE_PATH }}/AndroidProducts.mk" ]; then
+          echo "错误：设备树缺失 Android.mk 或 AndroidProducts.mk，请检查设备树完整性"
+          exit 1
+        fi
+        # 检查产品配置是否包含"omni_READBOY"，无则手动添加
+        if ! grep -q "omni_READBOY" "${{ github.event.inputs.DEVICE_PATH }}/AndroidProducts.mk" 2>/dev/null; then
+          echo "警告：设备树未注册omni_READBOY，手动添加产品配置"
+          echo -e "\nPRODUCT_MAKEFILES := \$(LOCAL_DIR)/omni_READBOY.mk" >> "${{ github.event.inputs.DEVICE_PATH }}/AndroidProducts.mk"
+        fi
+        # 检查是否存在产品Makefile，无则创建空模板（避免编译报错）
+        if [ ! -f "${{ github.event.inputs.DEVICE_PATH }}/omni_READBOY.mk" ]; then
+          echo "警告：未找到omni_READBOY.mk，创建基础产品配置"
+          echo -e "include \$(SRC_TARGET_DIR)/product/core_64_bit.mk\nPRODUCT_NAME := omni_READBOY\nPRODUCT_DEVICE := READBOY" >> "${{ github.event.inputs.DEVICE_PATH }}/omni_READBOY.mk"
+        fi
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
     - name: 克隆通用树
       if: ${{ github.event.inputs.COMMON_TREE_URL != '' && github.event.inputs.COMMON_PATH != '' }}
       run: |
@@ -189,42 +209,59 @@ jobs:
         fi
         repo sync -j$(nproc --all) || repo sync -j1 || true
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
-      # 修复：移除重复的“修复”注释，保持整洁
+      # 修复：移除 continue-on-error: true，依赖失败时终止，便于排查根因
     - name: 设置交换空间
       uses: pierotofy/set-swap-space@master
       with:
         swap-size-gb: 12
-    - name: 构建 Recovery
+    - name: 构建 Recovery（整合所有修复）
       run: |
         set -e
         cd "${{ steps.pwd.outputs.workspace-folder }}"
-        # 修复1：兼容Python 3的print语法（解决 findleaves.py 语法报错）
+        # 修复1：兼容Python 3的print语法（解决findleaves.py报错）
         sed -i 's/print r/print(r)/g' build/tools/findleaves.py
-        # 修复2：设置正确的输出目录（避免根目录/out权限拒绝）
+        # 修复2：兼容Python 3的异常语法（解决roomservice.py报错）
+        sed -i 's/except IOError, ES.ParseError:/except (IOError, ES.ParseError):/g' build/tools/roomservice.py
+        # 修复3：设置正确输出目录（避免根目录/out权限拒绝）
         export OUT_DIR="${{ steps.pwd.outputs.workspace-folder }}/out"
-        # 修复3：强制忽略大小写文件系统检测（解决Runner误判）
+        # 修复4：强制忽略大小写检测（解决Runner误判）
         export FORCE_CASE_SENSITIVE=1
-        # 新增修复4：补全Bash变量（解决 test: -ge 语法错误）
+        # 修复5：补全系统变量（解决Bash test语法错误）
         export HOST_OS_VERSION=$(uname -r)
-        # 新增修复5：适配Readboy G60实际屏幕分辨率（800×1280），自动匹配TWRP主题
+        # 修复6：适配Readboy G60实际分辨率（800×1280），自动匹配TWRP主题
         export TARGET_SCREEN_WIDTH=800
         export TARGET_SCREEN_HEIGHT=1280
+        # 修复7：强制32位ARM架构（匹配twrp-5.1，避免arm64配置缺失）
+        export TARGET_ARCH=arm
+        export TARGET_ARCH_VARIANT=armv7-a
+        export TARGET_CPU_VARIANT=generic
 
         if [ -f build/envsetup.sh ]; then
-          echo "找到 build/envsetup.sh，开始构建流程"
+          echo "找到 build/envsetup.sh，加载构建环境"
           source build/envsetup.sh
+          # 手动加载设备树的vendorsetup.sh，确保产品注册
+          if [ -f "${{ github.event.inputs.DEVICE_PATH }}/vendorsetup.sh" ]; then
+            source "${{ github.event.inputs.DEVICE_PATH }}/vendorsetup.sh"
+          else
+            echo "手动注册产品：omni_READBOY-eng"
+            add_lunch_combo "omni_READBOY-eng"
+          fi
         else
-          echo "错误：未找到 build/envsetup.sh — 可能清单不包含预期的源码树或分支"
+          echo "错误：未找到 build/envsetup.sh，清单源码异常"
           exit 1
         fi
+
         export ALLOW_MISSING_DEPENDENCIES=true
         echo "运行 lunch：${{ github.event.inputs.MAKEFILE_NAME }}-eng"
-        if lunch "${{ github.event.inputs.MAKEFILE_NAME }}-eng"; then
-          echo "lunch 成功"
-        else
-          echo "警告：lunch 失败，继续尝试构建（但构建很可能随之失败）"
+        # 强制lunch成功，失败则终止（避免无效构建）
+        if ! lunch "${{ github.event.inputs.MAKEFILE_NAME }}-eng"; then
+          echo "lunch失败，可用产品列表："
+          lunch  # 列出所有可用产品，便于排查
+          exit 1
         fi
+
         make clean || true
+        echo "开始构建 recovery.img（并行度：$(nproc --all)）"
         make "${{ github.event.inputs.BUILD_TARGET }}image" -j$(nproc --all) || { echo "构建失败，请检查日志"; exit 1; }
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
     - name: 上传到 Release
@@ -234,11 +271,12 @@ jobs:
           ${{ steps.pwd.outputs.workspace-folder }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/${{ github.event.inputs.BUILD_TARGET }}.img
           ${{ steps.pwd.outputs.workspace-folder }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*.zip
           ${{ steps.pwd.outputs.workspace-folder }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*vendor*.img
-        name: ${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_id }}
-        tag_name: ${{ github.run_id }}
+        name: Readboy G60-TWRP-${{ github.run_id }}
+        tag_name: G60-${{ github.run_id }}
         body: |
+          适配设备：Readboy G60（分辨率800×1280）
           清单分支：${{ github.event.inputs.MANIFEST_BRANCH }}
-          设备名称：${{ github.event.inputs.DEVICE_NAME }}（适配Readboy G60 800×1280分辨率）
           构建目标：${{ github.event.inputs.BUILD_TARGET }}.img
+          构建时间：${{ github.event.repository.updated_at }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
