@@ -1,17 +1,17 @@
-name:  Recovery 构建（arm64/Readboy G60 修复版）
+name:  Recovery 构建（arm64/Readboy G60 最终版）
 on:
   workflow_dispatch:
     inputs:
       MANIFEST_URL:
-        description: '清单URL（twrp-6.0 原生支持arm64）'
+        description: '清单URL'
         required: true
         default: 'https://github.com/minimal-manifest-twrp/platform_manifest_twrp_omni'
       MANIFEST_BRANCH:
-        description: '清单分支（必须为 twrp-6.0）'
+        description: '清单分支（强制twrp-6.0）'
         required: true
         default: 'twrp-6.0'
       DEVICE_TREE_URL:
-        description: '设备树URL（已配置arm64）'
+        description: '设备树URL'
         required: true
         default: 'https://github.com/MengWanYu/android_device_Allwinner_READBOY'
       DEVICE_TREE_BRANCH:
@@ -56,31 +56,28 @@ jobs:
     - name: 显示运行参数
       run: |
         echo "::group::用户环境变量"
-        echo "清单分支：${{ github.event.inputs.MANIFEST_BRANCH }}（强制twrp-6.0以支持arm64）"
-        echo "设备树路径：${{ github.event.inputs.DEVICE_PATH }}"
-        echo "构建目标：${{ github.event.inputs.BUILD_TARGET }}.img（arm64架构）"
+        echo "清单分支：${{ github.event.inputs.MANIFEST_BRANCH }}"
+        echo "设备树：${{ github.event.inputs.DEVICE_TREE_URL }}"
+        echo "架构：arm64-v8a"
         echo "::endgroup::"
     - name: 检出代码
       uses: actions/checkout@v4
     - name: 清理环境
       uses: rokibhasansagar/slimhub_actions@main
-    - name: 准备构建环境（补充arm64 clang依赖）
+    - name: 准备构建环境（修复包名+移除无效挂载）
       run: |
         sudo apt update && sudo apt upgrade -y
-        sudo mount -o remount,case=sensitive / || true
-        # 关键：安装arm64交叉编译工具链和clang
+        # 移除无效的根目录重新挂载（Ubuntu 24.04默认已大小写敏感）
+        # 纠正arm64依赖：Ubuntu无clang-aarch64-linux-gnu，用clang+llvm+交叉编译gcc即可
         DEBIAN_FRONTEND=noninteractive sudo apt install -yq \
             linux-modules-extra-$(uname -r) \
             gperf gcc-multilib gcc-10-multilib g++-multilib g++-10-multilib \
-            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu clang clang-aarch64-linux-gnu \  # 新增arm64 clang
+            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu clang llvm \  # 正确arm64依赖
             libc6-dev lib32ncurses-dev x11proto-core-dev libx11-dev tree lib32z-dev libgl1-mesa-dev libxml2-utils \
             xsltproc bc ccache lib32readline-dev lib32z1-dev liblz4-tool libncurses-dev libsdl1.2-dev \
             build-essential libgtk-3-dev libglu1-mesa-dev freeglut3-dev git libxml2 lzop pngcrush schedtool squashfs-tools \
             imagemagick libbz2-dev lzma ncftp qemu-user-static libstdc++-10-dev libncurses6 python3 tar || true
-        # 配置clang路径（解决arm64配置文件缺失）
-        sudo ln -sf /usr/bin/clang-aarch64-linux-gnu /usr/bin/clang
-        sudo ln -sf /usr/bin/clang++-aarch64-linux-gnu /usr/bin/clang++
-    - name: 安装 OpenJDK 8（兼容twrp-6.0）
+    - name: 安装 OpenJDK 8
       uses: actions/setup-java@v4
       with:
         distribution: 'temurin'
@@ -97,7 +94,7 @@ jobs:
         curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo -o ~/bin/repo
         chmod a+x ~/bin/repo
         sudo ln -sf ~/bin/repo /usr/bin/repo
-    - name: 初始化 repo（确保twrp-6.0分支）
+    - name: 初始化 repo
       id: pwd
       run: |
         set -e
@@ -105,21 +102,18 @@ jobs:
         echo "workspace-folder=$(pwd)" >> $GITHUB_OUTPUT
         git config --global user.name "Nico170420"
         git config --global user.email "b170420nc@gmail.com"
-        # 强制验证twrp-6.0分支，避免分支错误
-        if ! git ls-remote --exit-code --heads "${{ github.event.inputs.MANIFEST_URL }}" "refs/heads/twrp-6.0" >/dev/null 2>&1; then
-          echo "错误：twrp-6.0分支不存在，请检查清单URL"
+        if ! git ls-remote --exit-code --heads "${{ github.event.inputs.MANIFEST_URL }}" "twrp-6.0" >/dev/null 2>&1; then
+          echo "错误：twrp-6.0分支不存在"
           exit 1
         fi
         repo init --depth=1 -u "${{ github.event.inputs.MANIFEST_URL }}" -b twrp-6.0
-    - name: 同步源码（确保arm64文件完整）
+    - name: 同步源码
       run: |
         cd "${{ steps.pwd.outputs.workspace-folder }}"
-        # 增加同步超时时间，确保arm64 clang配置文件下载完整
         repo sync -j$(nproc --all) --force-sync --no-tags --no-clone-bundle --timeout=120 || {
-          echo "同步失败，重试1次"
           repo sync -j1 --force-sync --no-tags --no-clone-bundle --timeout=180
         }
-    - name: 克隆设备树（arm64配置）
+    - name: 克隆设备树
       run: |
         cd "${{ steps.pwd.outputs.workspace-folder }}"
         mkdir -p $(dirname "./${{ github.event.inputs.DEVICE_PATH }}")
@@ -127,86 +121,90 @@ jobs:
           echo "设备树克隆失败"
           exit 1
         }
-    - name: 修复arm64 clang配置缺失（关键）
+    - name: 修复arm64 clang配置文件（关键）
       run: |
         cd "${{ steps.pwd.outputs.workspace-folder }}"
-        CLANG_CONFIG_PATH="build/core/clang"
-        # 若TARGET_arm64-v8a.mk缺失，从模板创建（适配twrp-6.0）
-        if [ ! -f "${CLANG_CONFIG_PATH}/TARGET_arm64-v8a.mk" ]; then
-          echo "创建缺失的TARGET_arm64-v8a.mk"
-          mkdir -p "${CLANG_CONFIG_PATH}"
-          cat > "${CLANG_CONFIG_PATH}/TARGET_arm64-v8a.mk" << EOF
-          # 适配twrp-6.0的arm64 clang配置
-          CLANG_TARGET_ARCH := arm64
-          CLANG_TARGET_CPU := generic
-          CLANG_TARGET_ABI := aarch64-linux-android
-          CLANG_FLAGS := -target aarch64-linux-android -march=armv8-a
-          EOF
-        fi
-    - name: 验证设备树arm64配置
+        CLANG_CONFIG="build/core/clang/TARGET_arm64-v8a.mk"
+        mkdir -p $(dirname "${CLANG_CONFIG}")
+        # 写入完整的arm64 clang配置，适配twrp-6.0
+        cat > "${CLANG_CONFIG}" << EOF
+        # TWRP 6.0 arm64 clang配置（解决缺失问题）
+        CLANG_TARGET_ARCH := arm64
+        CLANG_TARGET_CPU := generic
+        CLANG_TARGET_ABI := aarch64-linux-android
+        CLANG_FLAGS := -target aarch64-linux-android -march=armv8-a -fPIC
+        CLANG_CFLAGS := \$(CLANG_FLAGS)
+        CLANG_CXXFLAGS := \$(CLANG_FLAGS)
+        CC := clang
+        CXX := clang++
+        LD := aarch64-linux-gnu-ld
+        AR := aarch64-linux-gnu-ar
+        RANLIB := aarch64-linux-gnu-ranlib
+        EOF
+    - name: 强制设备树arm64配置
       run: |
         cd "${{ steps.pwd.outputs.workspace-folder }}"
         CONFIG="${{ github.event.inputs.DEVICE_PATH }}/BoardConfig.mk"
-        # 强制确保设备树为arm64配置
+        # 覆盖设备树架构配置，确保是arm64
         sed -i '/^TARGET_ARCH=/d' "${CONFIG}"
         sed -i '/^TARGET_CPU_ABI=/d' "${CONFIG}"
+        sed -i '/^TARGET_ARCH_VARIANT=/d' "${CONFIG}"
+        sed -i '/^CC=/d' "${CONFIG}"
+        sed -i '/^CXX=/d' "${CONFIG}"
         echo "TARGET_ARCH := arm64-v8a" >> "${CONFIG}"
         echo "TARGET_CPU_ABI := arm64-v8a" >> "${CONFIG}"
         echo "TARGET_ARCH_VARIANT := generic" >> "${CONFIG}"
+        echo "TARGET_CPU_VARIANT := generic" >> "${CONFIG}"
     - name: 克隆通用树（可选）
       if: ${{ github.event.inputs.COMMON_TREE_URL != '' }}
       run: |
         cd "${{ steps.pwd.outputs.workspace-folder }}"
-        git clone "${{ github.event.inputs.COMMON_TREE_URL }}" -b "${{ github.event.inputs.COMMON_TREE_BRANCH }}" "./${{ github.event.inputs.COMMON_PATH }}" || echo "通用树克隆失败（可忽略）"
-    - name: 设置交换空间（arm64编译需更大内存）
+        git clone "${{ github.event.inputs.COMMON_TREE_URL }}" -b "${{ github.event.inputs.COMMON_TREE_BRANCH }}" "./${{ github.event.inputs.COMMON_PATH }}" || true
+    - name: 设置交换空间
       uses: pierotofy/set-swap-space@master
       with:
         swap-size-gb: 16
-    - name: 构建 Recovery（修复所有错误）
+    - name: 构建 Recovery（修复所有Python+编译错误）
       run: |
         set -e
         cd "${{ steps.pwd.outputs.workspace-folder }}"
-        # 修复1：Python 3 filter无len()错误（roomservice.py）
+        # 修复1：Python 3 filter无len()错误
         sed -i 's/len(matches)/len(list(matches))/g' build/tools/roomservice.py
-        # 修复2：Python 2 print语法（findleaves.py）
+        # 修复2：Python 2 print语法
         sed -i 's/print r/print(r)/g' build/tools/findleaves.py
-        # 修复3：Python 2 异常语法（roomservice.py）
+        # 修复3：Python 2 异常语法
         sed -i 's/except IOError, ES.ParseError:/except (IOError, ES.ParseError):/g' build/tools/roomservice.py
+        # 修复4：可能存在的其他Python 2语法（dict.iteritems()）
+        sed -i 's/iteritems()/items()/g' build/tools/roomservice.py 2>/dev/null || true
 
-        # 配置arm64环境变量
+        # 配置环境变量
         export OUT_DIR="${{ steps.pwd.outputs.workspace-folder }}/out"
         export FORCE_CASE_SENSITIVE=1
         export TARGET_SCREEN_WIDTH=800
         export TARGET_SCREEN_HEIGHT=1280
         export ALLOW_MISSING_DEPENDENCIES=true
-        # 强制指定arm64 clang路径
-        export CC=clang-aarch64-linux-gnu
-        export CXX=clang++-aarch64-linux-gnu
+        # 绑定arm64工具链
+        export CC=clang
+        export CXX=clang++
+        export LD=aarch64-linux-gnu-ld
+        export AR=aarch64-linux-gnu-ar
 
-        # 加载构建环境并注册产品
+        # 加载环境+注册产品
         source build/envsetup.sh
-        if [ -f "${{ github.event.inputs.DEVICE_PATH }}/vendorsetup.sh" ]; then
-          source "${{ github.event.inputs.DEVICE_PATH }}/vendorsetup.sh"
-        else
-          add_lunch_combo "omni_READBOY-eng"
-        fi
+        [ -f "${{ github.event.inputs.DEVICE_PATH }}/vendorsetup.sh" ] && source "${{ github.event.inputs.DEVICE_PATH }}/vendorsetup.sh" || add_lunch_combo "omni_READBOY-eng"
 
-        # 自动选择产品（编号9），避免交互式中断
-        echo "自动选择arm64产品：omni_READBOY-eng（编号9）"
-        echo 9 | lunch "omni_READBOY-eng" || {
-          echo "强制选择产品9"
-          echo 9 | lunch
-        }
+        # 自动选择产品
+        echo "9" | lunch "omni_READBOY-eng" || echo "9" | lunch
 
-        # 开始构建
+        # 构建
         make clean || true
         echo "启动arm64 recovery.img构建"
         make "${{ github.event.inputs.BUILD_TARGET }}image" -j$(nproc --all) || {
-          echo "构建失败，查看详细日志"
-          cat out/build.log
+          echo "构建失败，输出最后100行日志"
+          tail -n 100 out/build.log
           exit 1
         }
-    - name: 上传arm64产物
+    - name: 上传产物
       uses: softprops/action-gh-release@v2
       with:
         files: |
@@ -214,8 +212,9 @@ jobs:
         name: Readboy G60-arm64-TWRP-${{ github.run_id }}
         tag_name: G60-arm64-${{ github.run_id }}
         body: |
-          适配：Readboy G60（800×1280）
+          适配设备：Readboy G60（800×1280）
           架构：arm64-v8a
-          修复：TARGET_arm64-v8a.mk缺失 + Python filter语法错误
+          清单分支：twrp-6.0
+          修复内容：包找不到、clang配置缺失、Python语法错误
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
