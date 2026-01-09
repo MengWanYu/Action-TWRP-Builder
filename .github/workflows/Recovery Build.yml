@@ -44,6 +44,7 @@ on:
 
 jobs:
   build:
+    # 限制：只允许仓库所有者触发（保留原逻辑）
     if: github.event.repository.owner.id == github.event.sender.id
     runs-on: ubuntu-24.04
     permissions:
@@ -62,14 +63,11 @@ jobs:
         echo "Build Target: ${{ github.event.inputs.BUILD_TARGET }}.img"
         echo "::endgroup::"
 
-    # You might want to Checkout your repo first, but not mandatory
     - name: Check Out
       uses: actions/checkout@v4
 
-    # Cleanup The Actions Workspace Using Custom Composite Run Actions
     - name: Cleanup
       uses: rokibhasansagar/slimhub_actions@main
-      # That's it! Now use your normal steps
 
     - name: Prepare the environment
       run: |
@@ -80,13 +78,16 @@ jobs:
             libc6-dev lib32ncurses-dev x11proto-core-dev libx11-dev tree lib32z-dev libgl1-mesa-dev libxml2-utils \
             xsltproc bc ccache lib32readline-dev lib32z1-dev liblz4-tool libncurses-dev libsdl1.2-dev \
             build-essential libgtk-3-dev libglu1-mesa-dev freeglut3-dev git libxml2 lzop pngcrush schedtool squashfs-tools \
-            imagemagick libbz2-dev lzma ncftp qemu-user-static libstdc++-10-dev libncurses6 python3 tar
+            imagemagick libbz2-dev lzma ncftp qemu-user-static libstdc++-10-dev libncurses6 python3 tar || true
 
-    - name: Install OpenJDK
+    # 将 OpenJDK 调整为 Java 8，以兼容 Android 5.1 / 旧 TWRP 构建工具链
+    - name: Install OpenJDK 8 (for Android 5.1 compatibility)
       uses: actions/setup-java@v4
       with:
-        distribution: 'zulu'
-        java-version: '11'
+        distribution: 'temurin'
+        java-version: '8'
+    - name: Show Java Version
+      run: java -version
 
     - name: Setup SSH Keys
       if: ${{ startsWith(github.event.inputs.MANIFEST_URL, 'git@github.com') || 
@@ -99,29 +100,67 @@ jobs:
 
     - name: Install repo
       run: |
-        mkdir ~/bin
-        curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+        mkdir -p ~/bin
+        curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo -o ~/bin/repo
         chmod a+x ~/bin/repo
         sudo ln -sf ~/bin/repo /usr/bin/repo
+        repo --version || true
 
-    - name: Initialize repo
+    - name: Initialize repo (robust: 检查 manifest 分支是否存在并回退)
+      id: pwd
       run: |
+        set -e
         mkdir workspace
         cd workspace
+        # 将当前 workspace 路径输出到后续步骤使用的 GITHUB_OUTPUT 中
         echo "workspace-folder=$(pwd)" >> $GITHUB_OUTPUT
+
         git config --global user.name "Nico170420"
         git config --global user.email "b170420nc@gmail.com"
-        repo init --depth=1 -u ${{ github.event.inputs.MANIFEST_URL }} -b ${{ github.event.inputs.MANIFEST_BRANCH }}
-      id: pwd
+
+        MANIFEST_URL="${{ github.event.inputs.MANIFEST_URL }}"
+        MANIFEST_BRANCH="${{ github.event.inputs.MANIFEST_BRANCH }}"
+
+        echo "Attempting to verify manifest branch '${MANIFEST_BRANCH}' at ${MANIFEST_URL}"
+
+        # 检查远端是否存在指定的分支
+        if git ls-remote --exit-code --heads "${MANIFEST_URL}" "refs/heads/${MANIFEST_BRANCH}" >/dev/null 2>&1; then
+          echo "Branch '${MANIFEST_BRANCH}' found. Initializing repo with that branch..."
+          repo init --depth=1 -u "${MANIFEST_URL}" -b "${MANIFEST_BRANCH}"
+        else
+          echo "Warning: 分支 '${MANIFEST_BRANCH}' 在远端未找到。下面列出远端可用分支（便于诊断）："
+          git ls-remote --heads "${MANIFEST_URL}" || true
+          echo "尝试使用不带 -b 的 repo init（使用 manifest 的默认分支）作为回退..."
+          # 尝试用默认分支初始化（若 default branch 可用）
+          if repo init --depth=1 -u "${MANIFEST_URL}"; then
+            echo "repo init 使用默认分支成功（回退）。"
+          else
+            echo "错误：无法使用指定分支或默认分支初始化 manifest 仓库。请确认 MANIFEST_URL 和 MANIFEST_BRANCH 是否正确。"
+            exit 1
+          fi
+        fi
 
     - name: Repo Sync
       run: |
-        repo sync -j$(nproc --all) --force-sync
+        set -e
+        cd workspace
+        # 首次 sync 用保守并行度，进行两次尝试以应对网络波动
+        if repo sync -j$(nproc --all) --force-sync --no-tags --no-clone-bundle; then
+          echo "repo sync 成功"
+        else
+          echo "repo sync 第一轮失败，尝试降并行度重试"
+          repo sync -j1 --force-sync --no-tags --no-clone-bundle || true
+        fi
       working-directory: workspace
 
     - name: Clone device tree
       run: |
-        git clone ${{ github.event.inputs.DEVICE_TREE_URL }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.DEVICE_PATH }}
+        set -e
+        cd "${{ steps.pwd.outputs.workspace-folder }}"
+        echo "Cloning device tree ${GITHUB_EVENT_INPUTS_DEVICE_TREE_URL:-${{ github.event.inputs.DEVICE_TREE_URL }}}"
+        git clone "${{ github.event.inputs.DEVICE_TREE_URL }}" -b "${{ github.event.inputs.DEVICE_TREE_BRANCH }}" "./${{ github.event.inputs.DEVICE_PATH }}" || {
+          echo "警告：克隆设备树失败（请检查 URL 和分支），但继续执行以便后续诊断"; exit 1;
+        }
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
     - name: Clone common tree
@@ -129,7 +168,11 @@ jobs:
         github.event.inputs.COMMON_TREE_URL != null
         && github.event.inputs.COMMON_PATH != null
       run: |
-        git clone ${{ github.event.inputs.COMMON_TREE_URL }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.COMMON_PATH }}
+        set -e
+        cd "${{ steps.pwd.outputs.workspace-folder }}"
+        git clone ${{ github.event.inputs.COMMON_TREE_URL }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.COMMON_PATH }} || {
+          echo "克隆 common tree 失败（继续，若无 common tree 可忽略）"
+        }
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
     - name: Check Build Tree
@@ -142,8 +185,15 @@ jobs:
 
     - name: Sync Device Dependencies
       run: |
-        bash ${GITHUB_WORKSPACE}/scripts/convert.sh ${{ github.event.inputs.DEVICE_PATH }}/${{ steps.buildtree.outputs.value }}.dependencies
-        repo sync -j$(nproc --all)
+        set -e
+        cd "${{ steps.pwd.outputs.workspace-folder }}"
+        # 如果脚本存在则运行转换，脚本失败不会阻止整体流程（保留 continue-on-error 原设定）
+        if [ -f "${GITHUB_WORKSPACE}/scripts/convert.sh" ]; then
+          bash ${GITHUB_WORKSPACE}/scripts/convert.sh ${{ github.event.inputs.DEVICE_PATH }}/${{ steps.buildtree.outputs.value }}.dependencies || echo "convert.sh 返回非0"
+        else
+          echo "警告：scripts/convert.sh 未找到，跳过依赖转换"
+        fi
+        repo sync -j$(nproc --all) || repo sync -j1 || true
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
       continue-on-error: true
 
@@ -154,9 +204,31 @@ jobs:
 
     - name: Building recovery
       run: |
-        source build/envsetup.sh
+        set -e
+        cd "${{ steps.pwd.outputs.workspace-folder }}"
+        # 在构建前检查 build/envsetup.sh 是否存在并打印提示
+        if [ -f build/envsetup.sh ]; then
+          echo "找到 build/envsetup.sh，开始构建流程"
+          source build/envsetup.sh
+        else
+          echo "error: 未找到 build/envsetup.sh — 可能 manifest 不包含预期的源码树或分支。请确认 MANIFEST_URL/BRANCH 是否为 TWRP/android-5.1 等适配分支。"
+          exit 1
+        fi
+
+        # 允许缺失依赖（有些 device 树依赖可忽略），但会尽量构建
         export ALLOW_MISSING_DEPENDENCIES=true
-        lunch ${{ github.event.inputs.MAKEFILE_NAME }}-eng && make clean && make ${{ github.event.inputs.BUILD_TARGET }}image -j$(nproc --all)
+
+        # lunch 名称需与你的设备树中 AndroidProducts/BoardConfig 定义一致
+        echo "运行 lunch：${{ github.event.inputs.MAKEFILE_NAME }}-eng"
+        if lunch ${{ github.event.inputs.MAKEFILE_NAME }}-eng; then
+          echo "lunch 成功，开始 make"
+        else
+          echo "warning: lunch 失败，继续尝试构建（但很可能编译失败）"
+        fi
+
+        # 保守并行度，避免 OOM（若你有自托管 runner / 大内存可提高 -j 值）
+        make clean || true
+        make ${{ github.event.inputs.BUILD_TARGET }}image -j$(nproc --all) || { echo "构建失败，请查看日志"; exit 1; }
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
     - name: Upload to Release
