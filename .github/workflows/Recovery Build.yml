@@ -80,8 +80,9 @@ jobs:
             gperf gcc-multilib gcc-10-multilib g++-multilib g++-10-multilib \
             libc6-dev lib32ncurses-dev x11proto-core-dev libx11-dev tree lib32z-dev libgl1-mesa-dev libxml2-utils \
             xsltproc bc ccache lib32readline-dev lib32z1-dev liblz4-tool libncurses-dev libsdl1.2-dev \
-            build-essential libgtk-3-dev libglu1-mesa-dev freeglut3-dev git libxml2 lzop pngcrush schedchedtool squashfs-tools \
+            build-essential libgtk-3-dev libglu1-mesa-dev freeglut3-dev git libxml2 lzop pngcrush schedtool squashfs-tools \
             imagemagick libbz2-dev lzma ncftp qemu-user-static libstdc++-10-dev libncurses6 python3 tar || true
+        # 修复：修正"schedchedtool"拼写错误为"schedtool"，避免依赖安装失败
     - name: 安装 OpenJDK 8（兼容 Android 5.1）
       uses: actions/setup-java@v4
       with:
@@ -188,12 +189,11 @@ jobs:
         fi
         repo sync -j$(nproc --all) || repo sync -j1 || true
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
-      # 修复修复：移除 continue-on-error: true，依赖失败时直接终止，便于排查
+      # 修复：移除重复的“修复”注释，保持整洁
     - name: 设置交换空间
       uses: pierotofy/set-swap-space@master
       with:
         swap-size-gb: 12
-    # 修复：删除重复的“构建Recovery”步骤，修正YAML缩进
     - name: 构建 Recovery
       run: |
         set -e
@@ -204,6 +204,11 @@ jobs:
         export OUT_DIR="${{ steps.pwd.outputs.workspace-folder }}/out"
         # 修复3：强制忽略大小写文件系统检测（解决Runner误判）
         export FORCE_CASE_SENSITIVE=1
+        # 新增修复4：补全Bash变量（解决 test: -ge 语法错误）
+        export HOST_OS_VERSION=$(uname -r)
+        # 新增修复5：适配Readboy G60实际屏幕分辨率（800×1280），自动匹配TWRP主题
+        export TARGET_SCREEN_WIDTH=800
+        export TARGET_SCREEN_HEIGHT=1280
 
         if [ -f build/envsetup.sh ]; then
           echo "找到 build/envsetup.sh，开始构建流程"
@@ -233,7 +238,7 @@ jobs:
         tag_name: ${{ github.run_id }}
         body: |
           清单分支：${{ github.event.inputs.MANIFEST_BRANCH }}
-          设备名称：${{ github.event.inputs.DEVICE_NAME }}
+          设备名称：${{ github.event.inputs.DEVICE_NAME }}（适配Readboy G60 800×1280分辨率）
           构建目标：${{ github.event.inputs.BUILD_TARGET }}.img
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
