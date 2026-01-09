@@ -37,7 +37,7 @@ on:
       DEVICE_NAME:
         description: '设备名称'
         required: true
-        default: 'READBOY'
+        default: 'READBOYY'
       MAKEFILE_NAME:
         description: 'Makefile名称'
         required: true
@@ -128,9 +128,11 @@ jobs:
       run: |
         set -e
         cd "${{ steps.pwd.outputs.workspace-folder }}"
+        # 补全截断命令，保留重试逻辑
         if repo sync -j$(nproc --all) --force-sync --no-tags --no-clone-bundle; then
           echo "repo sync 成功"
         else
+          echo "repo sync 第一轮失败，尝试降并行度重试"
           repo sync -j1 --force-sync --no-tags --no-clone-bundle || true
         fi
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
@@ -139,53 +141,29 @@ jobs:
         set -e
         cd "${{ steps.pwd.outputs.workspace-folder }}"
         echo "克隆设备树：${{ github.event.inputs.DEVICE_TREE_URL }} @ ${{ github.event.inputs.DEVICE_TREE_BRANCH }}"
-        mkdir -p $(dirname "./${{ github.event.inputs.DEVICE_PATH }}")
+        mkdir -p $(dirname "./${{ github.event.inputs.DEVICE_PATH }}")  # 确保父目录存在
         git clone "${{ github.event.inputs.DEVICE_TREE_URL }}" -b "${{ github.event.inputs.DEVICE_TREE_BRANCH }}" "./${{ github.event.inputs.DEVICE_PATH }}" || {
           echo "错误：克隆设备树失败"
           exit 1
         }
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
-    - name: 修复设备树架构配置（关键：强制32位ARM）
+    - name: 验证设备树产品配置（确保lunch能找到产品）
       run: |
         set -e
         cd "${{ steps.pwd.outputs.workspace-folder }}"
-        DEVICE_CONFIG_PATH="${{ github.event.inputs.DEVICE_PATH }}/BoardConfig.mk"
-        # 1. 若存在BoardConfig.mk，强制覆盖架构配置
-        if [ -f "${DEVICE_CONFIG_PATH}" ]; then
-          echo "覆盖设备树架构配置为32位ARM"
-          sed -i '/^TARGET_ARCH=/d' "${DEVICE_CONFIG_PATH}"
-          sed -i '/^TARGET_ARCH_VARIANT=/d' "${DEVICE_CONFIG_PATH}"
-          sed -i '/^TARGET_CPU_VARIANT=/d' "${DEVICE_CONFIG_PATH}"
-          sed -i '/^TARGET_2ND_ARCH=/d' "${DEVICE_CONFIG_PATH}"
-          echo -e "\n# 强制32位ARM架构（适配twrp-5.1）" >> "${DEVICE_CONFIG_PATH}"
-          echo "TARGET_ARCH := arm" >> "${DEVICE_CONFIG_PATH}"
-          echo "TARGET_ARCH_VARIANT := armv7-a" >> "${DEVICE_CONFIG_PATH}"
-          echo "TARGET_CPU_VARIANT := generic" >> "${DEVICE_CONFIG_PATH}"
-        else
-          # 2. 若不存在BoardConfig.mk，创建基础配置文件
-          echo "创建BoardConfig.mk，配置32位ARM架构"
-          echo -e "# BoardConfig for Readboy G60 (32-bit ARM)" > "${DEVICE_CONFIG_PATH}"
-          echo "TARGET_ARCH := arm" >> "${DEVICE_CONFIG_PATH}"
-          echo "TARGET_ARCH_VARIANT := armv7-a" >> "${DEVICE_CONFIG_PATH}"
-          echo "TARGET_CPU_VARIANT := generic" >> "${DEVICE_CONFIG_PATH}"
-          echo "TARGET_SCREEN_WIDTH := 800" >> "${DEVICE_CONFIG_PATH}"
-          echo "TARGET_SCREEN_HEIGHT := 1280" >> "${DEVICE_CONFIG_PATH}"
-        fi
-      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
-    - name: 验证设备树产品配置
-      run: |
-        set -e
-        cd "${{ steps.pwd.outputs.workspace-folder }}"
+        # 检查核心配置文件完整性
         if [ ! -f "${{ github.event.inputs.DEVICE_PATH }}/Android.mk" ] || [ ! -f "${{ github.event.inputs.DEVICE_PATH }}/AndroidProducts.mk" ]; then
-          echo "错误：设备树缺失核心文件"
+          echo "错误：设备树缺失 Android.mk 或 AndroidProducts.mk，请检查设备树仓库"
           exit 1
         fi
+        # 检查产品是否注册，未注册则手动添加
         if ! grep -q "omni_READBOY" "${{ github.event.inputs.DEVICE_PATH }}/AndroidProducts.mk" 2>/dev/null; then
-          echo "手动添加产品配置"
+          echo "警告：设备树未注册omni_READBOY，手动添加产品配置"
           echo -e "\nPRODUCT_MAKEFILES := \$(LOCAL_DIR)/omni_READBOY.mk" >> "${{ github.event.inputs.DEVICE_PATH }}/AndroidProducts.mk"
         fi
+        # 检查产品Makefile是否存在，缺失则创建基础模板
         if [ ! -f "${{ github.event.inputs.DEVICE_PATH }}/omni_READBOY.mk" ]; then
-          echo "创建产品Makefile"
+          echo "警告：未找到omni_READBOY.mk，创建基础配置"
           echo -e "include \$(SRC_TARGET_DIR)/product/core.mk\nPRODUCT_NAME := omni_READBOY\nPRODUCT_DEVICE := READBOY" >> "${{ github.event.inputs.DEVICE_PATH }}/omni_READBOY.mk"
         fi
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
@@ -196,11 +174,11 @@ jobs:
         cd "${{ steps.pwd.outputs.workspace-folder }}"
         if [ "${{ github.event.inputs.COMMON_TREE_BRANCH }}" != "" ]; then
           git clone "${{ github.event.inputs.COMMON_TREE_URL }}" -b "${{ github.event.inputs.COMMON_TREE_BRANCH }}" "./${{ github.event.inputs.COMMON_PATH }}" || {
-            echo "警告：克隆通用树失败"
+            echo "警告：克隆通用树失败（若无通用树可忽略）"
           }
         else
           git clone "${{ github.event.inputs.COMMON_TREE_URL }}" "./${{ github.event.inputs.COMMON_PATH }}" || {
-            echo "警告：克隆通用树失败"
+            echo "警告：克隆通用树失败（若无通用树可忽略）"
           }
         fi
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
@@ -218,7 +196,7 @@ jobs:
         if [ -f "${GITHUB_WORKSPACE}/scripts/convert.sh" ]; then
           bash "${GITHUB_WORKSPACE}/scripts/convert.sh" "${{ github.event.inputs.DEVICE_PATH }}/${{ steps.buildtree.outputs.value }}.dependencies" || echo "convert.sh 返回非0"
         else
-          echo "警告：convert.sh 未找到"
+          echo "警告：convert.sh 未找到，跳过依赖转换"
         fi
         repo sync -j$(nproc --all) || repo sync -j1 || true
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
@@ -226,48 +204,44 @@ jobs:
       uses: pierotofy/set-swap-space@master
       with:
         swap-size-gb: 12
-    - name: 构建 Recovery（自动选择产品+架构强制）
+    - name: 构建 Recovery（完整逻辑，适配已修改的设备树）
       run: |
         set -e
         cd "${{ steps.pwd.outputs.workspace-folder }}"
-        # 修复Python脚本兼容性
-        sed -i 's/print r/print(r)/g' build/tools/findleaves.py
+        # 修复Python 2脚本兼容Python 3（必做）
+        sed -i ' 's/print r/print(r)/g' build/tools/findleaves.py
         sed -i 's/except IOError, ES.ParseError:/except (IOError, ES.ParseError):/g' build/tools/roomservice.py
-        # 环境变量配置
+        # 环境变量配置（双重保障构建兼容性）
         export OUT_DIR="${{ steps.pwd.outputs.workspace-folder }}/out"
         export FORCE_CASE_SENSITIVE=1
         export HOST_OS_VERSION=$(uname -r)
-        export TARGET_SCREEN_WIDTH=800
+        export TARGET_SCREEN_WIDTH=800  # 与设备树分辨率一致
         export TARGET_SCREEN_HEIGHT=1280
-        # 再次强制32位架构（双重保障）
-        export TARGET_ARCH=arm
-        export TARGET_ARCH_VARIANT=armv7-a
-        export TARGET_CPU_VARIANT=generic
-
+        export ALLOW_MISSING_DEPENDENCIES=true
+        # 加载构建环境并注册产品
         if [ -f build/envsetup.sh ]; then
           echo "加载构建环境"
           source build/envsetup.sh
-          # 手动注册产品（确保菜单出现）
+          # 手动加载设备树的vendorsetup.sh，确保产品被识别
           if [ -f "${{ github.event.inputs.DEVICE_PATH }}/vendorsetup.sh" ]; then
             source "${{ github.event.inputs.DEVICE_PATH }}/vendorsetup.sh"
           else
+            echo "手动注册产品：omni_READBOY-eng"
             add_lunch_combo "omni_READBOY-eng"
           fi
         else
-          echo "错误：未找到 build/envsetup.sh"
+          echo "错误：未找到 build/envsetup.sh，清单源码异常"
           exit 1
         fi
-
-        export ALLOW_MISSING_DEPENDENCIES=true
+        # 自动选择产品（编号9，避免交互式中断）
         echo "自动选择产品：omni_READBOY-eng（编号9）"
-        # 自动输入9选择产品，避免交互式中断
         echo 9 | lunch "${{ github.event.inputs.MAKEFILE_NAME }}-eng" || {
-          echo "lunch失败，强制选择产品编号9"
+          echo "直接指定产品失败，强制从菜单选择"
           echo 9 | lunch
         }
-
+        # 开始构建
         make clean || true
-        echo "开始构建 recovery.img"
+        echo "启动 recovery.img 构建（并行度：$(nproc --all)）"
         make "${{ github.event.inputs.BUILD_TARGET }}image" -j$(nproc --all) || { echo "构建失败，请检查日志"; exit 1; }
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
     - name: 上传到 Release
@@ -283,6 +257,7 @@ jobs:
           适配设备：Readboy G60（分辨率800×1280）
           清单分支：${{ github.event.inputs.MANIFEST_BRANCH }}
           构建目标：${{ github.event.inputs.BUILD_TARGET }}.img
-          架构：32位ARM（armv7-a）
+          架构：arm32（armeabi-v7a）
+          设备树状态：已提前修改BoardConfig.mk适配arm32，内核从源码编译
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
