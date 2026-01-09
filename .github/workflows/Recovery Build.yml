@@ -14,7 +14,7 @@ on:
       DEVICE_TREE_URL:
         description: 'DEVICE_TREE_URL'
         required: true
-        default: 'https://github.com/MengWanYu/android_device_Allwinner_READBOY/tree/main'
+        default: 'https://github.com/MengWanYu/android_device_Allwinner_READBOY'
       DEVICE_TREE_BRANCH:
         description: 'DEVICE_TREE_BRANCH'
         required: true
