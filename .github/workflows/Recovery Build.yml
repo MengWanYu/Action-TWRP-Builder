@@ -192,26 +192,35 @@ jobs:
       with:
         swap-size-gb: 12
     - name: 构建 Recovery
-      run: |
-        set -e
-        cd "${{ steps.pwd.outputs.workspace-folder }}"
-        if [ -f build/envsetup.sh ]; then
-          echo "找到 build/envsetup.sh，开始构建流程"
-          source build/envsetup.sh
-        else
-          echo "错误：未找到 build/envsetup.sh — 可能清单不包含预期的源码树或分支"
-          exit 1
-        fi
-        export ALLOW_MISSING_DEPENDENCIES=true
-        echo "运行 lunch：${{ github.event.inputs.MAKEFILE_NAME }}-eng"
-        if lunch "${{ github.event.inputs.MAKEFILE_NAME }}-eng"; then
-          echo "lunch 成功"
-        else
-          echo "警告：lunch 失败，继续尝试构建（但构建很可能随之失败）"
-        fi
-        make clean || true
-        make "${{ github.event.inputs.BUILD_TARGET }}image" -j$(nproc --all) || { echo "构建失败，请检查日志"; exit 1; }
-      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+    - name: 构建 Recovery
+  run: |
+    set -e
+    cd "${{ steps.pwd.outputs.workspace-folder }}"
+    # 修复1：兼容Python 3的print语法（修改findleaves.py）
+    sed -i 's/print r/print(r)/g' build/tools/findleaves.py
+    # 修复2：设置正确的输出目录（避免根目录/out）
+    export OUT_DIR="${{ steps.pwd.outputs.workspace-folder }}/out"
+    # 修复3：强制忽略大小写文件系统检测（针对Runner误判）
+    export FORCE_CASE_SENSITIVE=1
+
+    if [ -f build/envsetup.sh ]; then
+      echo "找到 build/envsetup.sh，开始构建流程"
+      source build/envsetup.sh
+    else
+      echo "错误：未找到 build/envsetup.sh — 可能清单不包含预期的源码树或分支"
+      exit 1
+    fi
+    export ALLOW_MISSING_DEPENDENCIES=true
+    echo "运行 lunch：${{ github.event.inputs.MAKEFILE_NAME }}-eng"
+    if lunch "${{ github.event.inputs.MAKEFILE_NAME }}-eng"; then
+      echo "lunch 成功"
+    else
+      echo "警告：lunch 失败，继续尝试构建（但构建很可能随之失败）"
+    fi
+    make clean || true
+    make "${{ github.event.inputs.BUILD_TARGET }}image" -j$(nproc --all) || { echo "构建失败，请检查日志"; exit 1; }
+  working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+
     - name: 上传到 Release
       uses: softprops/action-gh-release@v2
       with:
