@@ -1,0 +1,265 @@
+name:  Recovery 构建（arm64/Readboy G60）
+on:
+  workflow_dispatch:
+    inputs:
+      MANIFEST_URL:
+        description: '清单URL（若使用SSH密钥，格式为 git@github.com:XXXXX）'
+        required: true
+        default: 'https://github.com/minimal-manifest-twrp/platform_manifest_twrp_omni'
+      MANIFEST_BRANCH:
+        description: '清单分支（twrp-6.0原生支持arm64）'
+        required: true
+        default: 'twrp-6.0'  # 核心修改：切换为twrp-6.0分支
+      DEVICE_TREE_URL:
+        description: '设备树URL（需已配置arm64）'
+        required: true
+        default: 'https://github.com/MengWanYu/android_device_Allwinner_READBOY'
+      DEVICE_TREE_BRANCH:
+        description: '设备树分支'
+        required: true
+        default: 'main'
+      DEVICE_PATH:
+        description: '设备树路径'
+        required: true
+        default: 'device/Allwinner/READBOY'
+      COMMON_TREE_URL:
+        description: '通用树URL（无通用树则留空）'
+        required: false
+        default: ''
+      COMMON_TREE_BRANCH:
+        description: '通用树分支（需指定分支则填写，默认分支留空）'
+        required: false
+        default: ''
+      COMMON_PATH:
+        description: '通用树路径（无通用树则留空）'
+        required: false
+        default: ''
+      DEVICE_NAME:
+        description: '设备名称'
+        required: true
+        default: 'READBOY'
+      MAKEFILE_NAME:
+        description: 'Makefile名称'
+        required: true
+        default: 'omni_READBOY'
+      BUILD_TARGET:
+        description: '构建目标'
+        required: true
+        default: 'recovery'
+jobs:
+  build:
+    if: ${{ github.event.repository.owner.id == github.event.sender.id }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+    - name: 显示运行参数
+      run: |
+        echo "::group::用户环境变量"
+        echo "清单URL：${{ github.event.inputs.MANIFEST_URL }}"
+        echo "清单分支：${{ github.event.inputs.MANIFEST_BRANCH }}"
+        echo "设备树URL：${{ github.event.inputs.DEVICE_TREE_URL }}"
+        echo "设备树分支：${{ github.event.inputs.DEVICE_TREE_BRANCH }}"
+        echo "设备树路径：${{ github.event.inputs.DEVICE_PATH }}"
+        echo "设备名称：${{ github.event.inputs.DEVICE_NAME }}"
+        echo "Makefile名称：${{ github.event.inputs.MAKEFILE_NAME }}"
+        echo "构建目标：${{ github.event.inputs.BUILD_TARGET }}.img"
+        echo "架构适配：arm64-v8a（twrp-6.0原生支持）"
+        echo "::endgroup::"
+    - name: 检出代码
+      uses: actions/checkout@v4
+    - name: 清理环境
+      uses: rokibhasansagar/slimhub_actions@main
+    - name: 准备构建环境（适配arm64编译）
+      run: |
+        sudo apt update && sudo apt upgrade -y
+        sudo mount -o remount,case=sensitive / || true
+        # 补充arm64编译依赖，确保工具链完整
+        DEBIAN_FRONTEND=noninteractive sudo apt install -yq \
+            linux-modules-extra-$(uname -r) \
+            gperf gcc-multilib gcc-10-multilib g++-multilib g++-10-multilib \
+            libc6-dev lib32ncurses-dev x11proto-core-dev libx11-dev tree lib32z-dev libgl1-mesa-dev libxml2-utils \
+            xsltproc bc ccache lib32readline-dev lib32z1-dev liblz4-tool libncurses-dev libsdl1.2-dev \
+            build-essential libgtk-3-dev libglu1-mesa-dev freeglut3-dev git libxml2 lzop pngcrush schedtool squashfs-tools \
+            imagemagick libbz2-dev lzma ncftp qemu-user-static libstdc++-10-dev libncurses6 python3 tar \
+            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu || true  # 新增arm64交叉编译工具链
+    - name: 安装 OpenJDK 8（兼容 Android 6.0）
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '8'
+    - name: 显示Java版本
+      run: java -version
+    - name: 配置SSH密钥
+      if: ${{ startsWith(github.event.inputs.MANIFEST_URL, 'git@github.com') || startsWith(github.event.inputs.DEVICE_TREE_URL, 'git@github.com') || startsWith(github.event.inputs.COMMON_TREE_URL, 'git@github.com') }}
+      uses: webfactory/ssh-agent@v0.9.0
+      with:
+        ssh-private-key: |
+          ${{ secrets.SSH_PRIVATE_KEY }}
+    - name: 安装 repo 工具
+      run: |
+        mkdir -p ~/bin
+        curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo -o ~/bin/repo
+        chmod a+x ~/bin/repo
+        sudo ln -sf ~/bin/repo /usr/bin/repo
+        repo --version || true
+    - name: "初始化 repo（arm64适配版）"
+      id: pwd
+      run: |
+        set -e
+        mkdir -p workspace
+        cd workspace
+        echo "workspace-folder=$(pwd)" >> $GITHUB_OUTPUT
+        git config --global user.name "Nico170420"
+        git config --global user.email "b170420nc@gmail.com"
+        MANIFEST_URL="${{ github.event.inputs.MANIFEST_URL }}"
+        MANIFEST_BRANCH="${{ github.event.inputs.MANIFEST_BRANCH }}"
+        echo "验证twrp-6.0分支是否存在..."
+        if git ls-remote --exit-code --heads "${MANIFEST_URL}" "refs/heads/${MANIFEST_BRANCH}" >/dev/null 2>&1; then
+          repo init --depth=1 -u "${MANIFEST_URL}" -b "${MANIFEST_BRANCH}"
+        else
+          echo "警告：未找到twrp-6.0分支，列出可用分支："
+          git ls-remote --heads "${MANIFEST_URL}" || true
+          exit 1
+        fi
+    - name: 同步源码（arm64适配）
+      run: |
+        set -e
+        cd "${{ steps.pwd.outputs.workspace-folder }}"
+        # arm64源码体积较大，同步时保留重试逻辑
+        if repo sync -j$(nproc --all) --force-sync --no-tags --no-clone-bundle; then
+          echo "repo sync 成功（arm64源码同步完成）"
+        else
+          echo "同步失败，降并行度重试"
+          repo sync -j1 --force-sync --no-tags --no-clone-bundle || true
+        fi
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+    - name: 克隆设备树（arm64已配置）
+      run: |
+        set -e
+        cd "${{ steps.pwd.outputs.workspace-folder }}"
+        echo "克隆arm64设备树：${{ github.event.inputs.DEVICE_TREE_URL }}"
+        mkdir -p $(dirname "./${{ github.event.inputs.DEVICE_PATH }}")
+        git clone "${{ github.event.inputs.DEVICE_TREE_URL }}" -b "${{ github.event.inputs.DEVICE_TREE_BRANCH }}" "./${{ github.event.inputs.DEVICE_PATH }}" || {
+          echo "错误：设备树克隆失败"
+          exit 1
+        }
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+    - name: 验证arm64设备树配置
+      run: |
+        set -e
+        cd "${{ steps.pwd.outputs.workspace-folder }}"
+        DEVICE_CONFIG="${{ github.event.inputs.DEVICE_PATH }}/BoardConfig.mk"
+        # 检查设备树是否已配置arm64
+        if ! grep -q "TARGET_ARCH := arm64-v8a" "${DEVICE_CONFIG}" 2>/dev/null; then
+          echo "错误：设备树未配置arm64，请先在设备树中设置TARGET_ARCH=arm64-v8a"
+          exit 1
+        fi
+        # 检查产品配置完整性
+        if [ ! -f "${{ github.event.inputs.DEVICE_PATH }}/AndroidProducts.mk" ]; then
+          echo "错误：缺失AndroidProducts.mk"
+          exit 1
+        fi
+        if ! grep -q "omni_READBOY" "${{ github.event.inputs.DEVICE_PATH }}/AndroidProducts.mk"; then
+          echo "手动添加arm64产品配置"
+          echo -e "\nPRODUCT_MAKEFILES := \$(LOCAL_DIR)/omni_READBOY.mk" >> "${{ github.event.inputs.DEVICE_PATH }}/AndroidProducts.mk"
+        fi
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+    - name: 克隆通用树
+      if: ${{ github.event.inputs.COMMON_TREE_URL != '' && github.event.inputs.COMMON_PATH != '' }}
+      run: |
+        set -e
+        cd "${{ steps.pwd.outputs.workspace-folder }}"
+        if [ "${{ github.event.inputs.COMMON_TREE_BRANCH }}" != "" ]; then
+          git clone "${{ github.event.inputs.COMMON_TREE_URL }}" -b "${{ github.event.inputs.COMMON_TREE_BRANCH }}" "./${{ github.event.inputs.COMMON_PATH }}" || {
+            echo "警告：通用树克隆失败（可忽略）"
+          }
+        else
+          git clone "${{ github.event.inputs.COMMON_TREE_URL }}" "./${{ github.event.inputs.COMMON_PATH }}" || {
+            echo "警告：通用树克隆失败（可忽略）"
+          }
+        fi
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+    - name: 检查构建树类型
+      uses: haya14busa/action-cond@v1
+      id: buildtree
+      with:
+        cond: ${{ github.event.inputs.MANIFEST_BRANCH == 'twrp-11' || github.event.inputs.MANIFEST_BRANCH == 'twrp-12.1' }}
+        if_true: twrp
+        if_false: omni
+    - name: 同步设备依赖
+      run: |
+        set -e
+        cd "${{ steps.pwd.outputs.workspace-folder }}"
+        if [ -f "${GITHUB_WORKSPACE}/scripts/convert.sh" ]; then
+          bash "${GITHUB_WORKSPACE}/scripts/convert.sh" "${{ github.event.inputs.DEVICE_PATH }}/${{ steps.buildtree.outputs.value }}.dependencies" || echo "convert.sh 执行失败"
+        else
+          echo "跳过依赖转换（无convert.sh）"
+        fi
+        repo sync -j$(nproc --all) || repo sync -j1 || true
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+    - name: 设置交换空间（适配arm64编译内存需求）
+      uses: pierotofy/set-swap-space@master
+      with:
+        swap-size-gb: 16  # arm64编译内存需求更高，提升交换空间
+    - name: 构建 Recovery（arm64/twrp-6.0适配）
+      run: |
+        set -e
+        cd "${{ steps.pwd.outputs.workspace-folder }}"
+        # 修复Python 2脚本兼容Python 3（必做）
+        sed -i 's/print r/print(r)/g' build/tools/findleaves.py
+        sed -i 's/except IOError, ES.ParseError:/except (IOError, ES.ParseError):/g' build/tools/roomservice.py
+        # 环境变量配置（适配arm64，与设备树保持一致）
+        export OUT_DIR="${{ steps.pwd.outputs.workspace-folder }}/out"
+        export FORCE_CASE_SENSITIVE=1
+        export HOST_OS_VERSION=$(uname -r)
+        export TARGET_SCREEN_WIDTH=800  # 匹配Readboy G60分辨率
+        export TARGET_SCREEN_HEIGHT=1280
+        export ALLOW_MISSING_DEPENDENCIES=true
+        # 加载构建环境
+        if [ -f build/envsetup.sh ]; then
+          echo "加载arm64构建环境"
+          source build/envsetup.sh
+          # 注册arm64产品
+          if [ -f "${{ github.event.inputs.DEVICE_PATH }}/vendorsetup.sh" ]; then
+            source "${{ github.event.inputs.DEVICE_PATH }}/vendorsetup.sh"
+          else
+            echo "手动注册arm64产品：omni_READBOY-eng"
+            add_lunch_combo "omni_READBOY-eng"
+          fi
+        else
+          echo "错误：未找到build/envsetup.sh"
+          exit 1
+        fi
+        # 自动选择arm64产品（编号9）
+        echo "自动选择arm64产品：omni_READBOY-eng"
+        echo 9 | lunch "${{ github.event.inputs.MAKEFILE_NAME }}-eng" || {
+          echo "直接选择失败，从菜单强制选择"
+          echo 9 | lunch
+        }
+        # 开始arm64构建
+        make clean || true
+        echo "启动arm64 recovery.img构建（并行度：$(nproc --all)）"
+        make "${{ github.event.inputs.BUILD_TARGET }}image" -j$(nproc --all) || {
+          echo "构建失败，请检查日志"
+          exit 1
+        }
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+    - name: 上传arm64构建产物
+      uses: softprops/action-gh-release@v2
+      with:
+        files: |
+          ${{ steps.pwd.outputs.workspace-folder }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/${{ github.event.inputs.BUILD_TARGET }}.img
+          ${{ steps.pwd.outputs.workspace-folder }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*.zip
+          ${{ steps.pwd.outputs.workspace-folder }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*vendor*.img
+        name: Readboy G60-TWRP-arm64-${{ github.run_id }}
+        tag_name: G60-arm64-${{ github.run_id }}
+        body: |
+          适配设备：Readboy G60（分辨率800×1280）
+          清单分支：${{ github.event.inputs.MANIFEST_BRANCH }}（原生支持arm64）
+          构建目标：${{ github.event.inputs.BUILD_TARGET }}.img
+          架构：arm64-v8a（64位）
+          设备树状态：已配置arm64，预编译arm64内核
+          构建环境：Ubuntu 24.04 + OpenJDK 8 + arm64交叉编译工具链
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
