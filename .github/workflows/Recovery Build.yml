@@ -110,7 +110,7 @@ jobs:
       run: |
         set -e
         mkdir workspace
-        cd workspace
+        cd "${{ steps.pwd.outputs.workspace-folder }}"
         # 输出 workspace 路径供后续步骤使用
         echo "workspace-folder=$(pwd)" >> $GITHUB_OUTPUT
 
@@ -141,7 +141,7 @@ jobs:
     - name: Repo Sync
       run: |
         set -e
-        cd workspace
+        cd "${{ steps.pwd.outputs.workspace-folder }}"
         # 首次 sync 用较高并行度，失败则降并行重试
         if repo sync -j$(nproc --all) --force-sync --no-tags --no-clone-bundle; then
           echo "repo sync 成功"
@@ -181,7 +181,7 @@ jobs:
     - name: Sync Device Dependencies
       run: |
         set -e
-        cd workspace
+        cd "${{ steps.pwd.outputs.workspace-folder }}"
         if [ -f "${GITHUB_WORKSPACE}/scripts/convert.sh" ]; then
           bash ${GITHUB_WORKSPACE}/scripts/convert.sh "${{ github.event.inputs.DEVICE_PATH }}/${{ steps.buildtree.outputs.value }}.dependencies" || echo "convert.sh 返回非0"
         else
@@ -199,7 +199,7 @@ jobs:
     - name: Building recovery
       run: |
         set -e
-        cd workspace
+        cd "${{ steps.pwd.outputs.workspace-folder }}"
         if [ -f build/envsetup.sh ]; then
           echo "找到 build/envsetup.sh，开始构建流程"
           source build/envsetup.sh
@@ -220,7 +220,6 @@ jobs:
         make clean || true
         make "${{ github.event.inputs.BUILD_TARGET }}image" -j$(nproc --all) || { echo "构建失败，请检查日志"; exit 1; }
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
-
     - name: Upload to Release
       uses: softprops/action-gh-release@v2
         with:
