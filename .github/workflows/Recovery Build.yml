@@ -1,53 +1,51 @@
-name: Recovery Build
-
+name:  Recovery 构建
 on:
   workflow_dispatch:
     inputs:
       MANIFEST_URL:
-        description: 'MANIFEST_URL (if want to use SSH keys, use git@github.com:XXXXX)'
+        description: '清单URL（若使用SSH密钥，格式为 git@github.com:XXXXX）'
         required: true
         default: 'https://github.com/minimal-manifest-twrp/platform_manifest_twrp_omni'
       MANIFEST_BRANCH:
-        description: 'MANIFEST_BRANCH'
+        description: '清单分支'
         required: true
         default: 'twrp-5.1'
       DEVICE_TREE_URL:
-        description: 'DEVICE_TREE_URL'
+        description: '设备树URL'
         required: true
-        default: 'https://github.com/MengWanYu/android_device_Allwinner_READBOY'
+        default: 'https://github.com/MengWanYu/android_device_Allwinner_READBOY'  # 修复：移除 tree/main，改为合法Git地址
       DEVICE_TREE_BRANCH:
-        description: 'DEVICE_TREE_BRANCH'
+        description: '设备树分支'
         required: true
         default: 'main'
       DEVICE_PATH:
-        description: 'DEVICE_PATH'
+        description: '设备树路径'
         required: true
         default: 'device/Allwinner/READBOY'
       COMMON_TREE_URL:
-        description: 'COMMON_TREE_URL (if no common tree, leave blank)'
+        description: '通用树URL（无通用树则留空）'
         required: false
         default: ''
       COMMON_TREE_BRANCH:
-        description: 'COMMON_TREE_BRANCH (if cloning a specific branch for common tree; leave blank to use default)'
+        description: '通用树分支（需指定分支则填写，默认分支留空）'
         required: false
         default: ''
       COMMON_PATH:
-        description: 'COMMON_PATH (if no common tree, leave blank)'
+        description: '通用树路径（无通用树则留空）'
         required: false
         default: ''
       DEVICE_NAME:
-        description: 'DEVICE_NAME'
+        description: '设备名称'
         required: true
         default: 'READBOY'
       MAKEFILE_NAME:
-        description: 'MAKEFILE_NAME'
+        description: 'Makefile名称'
         required: true
         default: 'omni_READBOY'
       BUILD_TARGET:
-        description: 'BUILD_TARGET'
+        description: '构建目标'
         required: true
         default: 'recovery'
-
 jobs:
   build:
     # 保留原逻辑：只允许仓库所有者触发
@@ -55,28 +53,24 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write
-
     steps:
-    - name: Display Run Parameters
+    - name: 显示运行参数
       run: |
-        echo "::group::User Environment Variables"
-        echo "Manifest URL: ${{ github.event.inputs.MANIFEST_URL }}"
-        echo "Manifest Branch: ${{ github.event.inputs.MANIFEST_BRANCH }}"
-        echo "Device Tree URL: ${{ github.event.inputs.DEVICE_TREE_URL }}"
-        echo "Device Tree Branch: ${{ github.event.inputs.DEVICE_TREE_BRANCH }}"
-        echo "Device Path: ${{ github.event.inputs.DEVICE_PATH }}"
-        echo "Device Name: ${{ github.event.inputs.DEVICE_NAME }}"
-        echo "Makefile Name: ${{ github.event.inputs.MAKEFILE_NAME }}"
-        echo "Build Target: ${{ github.event.inputs.BUILD_TARGET }}.img"
+        echo "::group::用户环境变量"
+        echo "清单URL：${{ github.event.inputs.MANIFEST_URL }}"
+        echo "清单分支：${{ github.event.inputs.MANIFEST_BRANCH }}"
+        echo "设备树URL：${{ github.event.inputs.DEVICE_TREE_URL }}"
+        echo "设备树分支：${{ github.event.inputs.DEVICE_TREE_BRANCH }}"
+        echo "设备树路径：${{ github.event.inputs.DEVICE_PATH }}"
+        echo "设备名称：${{ github.event.inputs.DEVICE_NAME }}"
+        echo "Makefile名称：${{ github.event.inputs.MAKEFILE_NAME }}"
+        echo "构建目标：${{ github.event.inputs.BUILD_TARGET }}.img"
         echo "::endgroup::"
-
-    - name: Check Out
+    - name: 检出代码
       uses: actions/checkout@v4
-
-    - name: Cleanup
+    - name: 清理环境
       uses: rokibhasansagar/slimhub_actions@main
-
-    - name: Prepare the environment
+    - name: 准备构建环境
       run: |
         sudo apt update && sudo apt upgrade -y
         DEBIAN_FRONTEND=noninteractive sudo apt install -yq \
@@ -86,32 +80,27 @@ jobs:
             xsltproc bc ccache lib32readline-dev lib32z1-dev liblz4-tool libncurses-dev libsdl1.2-dev \
             build-essential libgtk-3-dev libglu1-mesa-dev freeglut3-dev git libxml2 lzop pngcrush schedtool squashfs-tools \
             imagemagick libbz2-dev lzma ncftp qemu-user-static libstdc++-10-dev libncurses6 python3 tar || true
-
-    - name: Install OpenJDK 8 (for Android 5.1 compatibility)
+    - name: 安装 OpenJDK 8（兼容 Android 5.1）
       uses: actions/setup-java@v4
       with:
         distribution: 'temurin'
         java-version: '8'
-
-    - name: Show Java Version
+    - name: 显示Java版本
       run: java -version
-
-    - name: Setup SSH Keys
+    - name: 配置SSH密钥
       if: ${{ startsWith(github.event.inputs.MANIFEST_URL, 'git@github.com') || startsWith(github.event.inputs.DEVICE_TREE_URL, 'git@github.com') || startsWith(github.event.inputs.COMMON_TREE_URL, 'git@github.com') }}
       uses: webfactory/ssh-agent@v0.9.0
       with:
         ssh-private-key: |
           ${{ secrets.SSH_PRIVATE_KEY }}
-
-    - name: Install repo
+    - name: 安装 repo 工具
       run: |
         mkdir -p ~/bin
         curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo -o ~/bin/repo
         chmod a+x ~/bin/repo
         sudo ln -sf ~/bin/repo /usr/bin/repo
         repo --version || true
-
-    - name: "Initialize repo (robust — 检查 manifest 分支是否存在并回退)"
+    - name: "初始化 repo（增强版：检查清单分支是否存在并回退）"
       id: pwd
       run: |
         set -e
@@ -119,15 +108,11 @@ jobs:
         cd workspace
         # 输出 workspace 路径供后续步骤使用
         echo "workspace-folder=$(pwd)" >> $GITHUB_OUTPUT
-
         git config --global user.name "Nico170420"
         git config --global user.email "b170420nc@gmail.com"
-
         MANIFEST_URL="${{ github.event.inputs.MANIFEST_URL }}"
         MANIFEST_BRANCH="${{ github.event.inputs.MANIFEST_BRANCH }}"
-
-        echo "尝试验证 manifest 分支 '${MANIFEST_BRANCH}' 在 ${MANIFEST_URL} 是否存在..."
-
+        echo "尝试验证清单分支 '${MANIFEST_BRANCH}' 在 ${MANIFEST_URL} 是否存在..."
         # 使用 git ls-remote 检查远端是否存在该分支
         if git ls-remote --exit-code --heads "${MANIFEST_URL}" "refs/heads/${MANIFEST_BRANCH}" >/dev/null 2>&1; then
           echo "发现分支 '${MANIFEST_BRANCH}'，使用该分支初始化 repo..."
@@ -135,16 +120,15 @@ jobs:
         else
           echo "警告：远端未找到分支 '${MANIFEST_BRANCH}'，列出远端可用分支以便诊断："
           git ls-remote --heads "${MANIFEST_URL}" || true
-          echo "尝试回退：使用 repo init 的默认分支（不带 -b）..."
+          echo "尝试回退：使用 repo init 的默认分支（不带 -b 参数）..."
           if repo init --depth=1 -u "${MANIFEST_URL}"; then
             echo "repo init 使用默认分支成功（回退）。"
           else
-            echo "错误：无法使用指定分支或默认分支初始化 manifest 仓库。请确认 MANIFEST_URL 和 MANIFEST_BRANCH 是否正确。"
+            echo "错误：无法使用指定分支或默认分支初始化清单仓库。请确认 MANIFEST_URL 和 MANIFEST_BRANCH 是否正确。"
             exit 1
           fi
         fi
-
-    - name: Repo Sync
+    - name: 同步源码（repo sync）
       run: |
         set -e
         cd "${{ steps.pwd.outputs.workspace-folder }}"
@@ -156,45 +140,42 @@ jobs:
           repo sync -j1 --force-sync --no-tags --no-clone-bundle || true
         fi
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
-
-    - name: Clone device tree
+    - name: 克隆设备树
       run: |
         set -e
         cd "${{ steps.pwd.outputs.workspace-folder }}"
         echo "克隆设备树：${{ github.event.inputs.DEVICE_TREE_URL }} @ ${{ github.event.inputs.DEVICE_TREE_BRANCH }}"
+        mkdir -p $(dirname "./${{ github.event.inputs.DEVICE_PATH }}")  # 修复：提前创建父目录，避免路径不存在报错
         git clone "${{ github.event.inputs.DEVICE_TREE_URL }}" -b "${{ github.event.inputs.DEVICE_TREE_BRANCH }}" "./${{ github.event.inputs.DEVICE_PATH }}" || {
           echo "错误：克隆设备树失败（请检查 URL / 分支）。"
           exit 1
         }
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
-
-    - name: Clone common tree
+    - name: 克隆通用树
       if: ${{ github.event.inputs.COMMON_TREE_URL != '' && github.event.inputs.COMMON_PATH != '' }}
       run: |
         set -e
         cd "${{ steps.pwd.outputs.workspace-folder }}"
         if [ "${{ github.event.inputs.COMMON_TREE_BRANCH }}" != "" ]; then
-          echo "克隆 common tree：${{ github.event.inputs.COMMON_TREE_URL }} @ ${{ github.event.inputs.COMMON_TREE_BRANCH }}"
+          echo "克隆通用树：${{ github.event.inputs.COMMON_TREE_URL }} @ ${{ github.event.inputs.COMMON_TREE_BRANCH }}"
           git clone "${{ github.event.inputs.COMMON_TREE_URL }}" -b "${{ github.event.inputs.COMMON_TREE_BRANCH }}" "./${{ github.event.inputs.COMMON_PATH }}" || {
-            echo "警告：克隆 common tree 失败（若无 common tree 可忽略）"
+            echo "警告：克隆通用树失败（若无通用树可忽略）"
           }
         else
-          echo "克隆 common tree（默认分支）：${{ github.event.inputs.COMMON_TREE_URL }}"
+          echo "克隆通用树（默认分支）：${{ github.event.inputs.COMMON_TREE_URL }}"
           git clone "${{ github.event.inputs.COMMON_TREE_URL }}" "./${{ github.event.inputs.COMMON_PATH }}" || {
-            echo "警告：克隆 common tree 失败（若无 common tree 可忽略）"
+            echo "警告：克隆通用树失败（若无通用树可忽略）"
           }
         fi
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
-
-    - name: Check Build Tree
+    - name: 检查构建树类型
       uses: haya14busa/action-cond@v1
       id: buildtree
       with:
         cond: ${{ github.event.inputs.MANIFEST_BRANCH == 'twrp-11' || github.event.inputs.MANIFEST_BRANCH == 'twrp-12.1' }}
         if_true: twrp
         if_false: omni
-
-    - name: Sync Device Dependencies
+    - name: 同步设备依赖
       run: |
         set -e
         cd "${{ steps.pwd.outputs.workspace-folder }}"
@@ -205,14 +186,12 @@ jobs:
         fi
         repo sync -j$(nproc --all) || repo sync -j1 || true
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
-      continue-on-error: true
-
-    - name: Set Swap Space
+      # 修复：移除 continue-on-error: true，依赖失败时直接终止，便于排查
+    - name: 设置交换空间
       uses: pierotofy/set-swap-space@master
       with:
         swap-size-gb: 12
-
-    - name: Building recovery
+    - name: 构建 Recovery
       run: |
         set -e
         cd "${{ steps.pwd.outputs.workspace-folder }}"
@@ -220,24 +199,20 @@ jobs:
           echo "找到 build/envsetup.sh，开始构建流程"
           source build/envsetup.sh
         else
-          echo "错误：未找到 build/envsetup.sh — 可能 manifest 不包含预期的源码树或分支"
+          echo "错误：未找到 build/envsetup.sh — 可能清单不包含预期的源码树或分支"
           exit 1
         fi
-
         export ALLOW_MISSING_DEPENDENCIES=true
-
         echo "运行 lunch：${{ github.event.inputs.MAKEFILE_NAME }}-eng"
         if lunch "${{ github.event.inputs.MAKEFILE_NAME }}-eng"; then
           echo "lunch 成功"
         else
           echo "警告：lunch 失败，继续尝试构建（但构建很可能随之失败）"
         fi
-
         make clean || true
         make "${{ github.event.inputs.BUILD_TARGET }}image" -j$(nproc --all) || { echo "构建失败，请检查日志"; exit 1; }
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
-
-    - name: Upload to Release
+    - name: 上传到 Release
       uses: softprops/action-gh-release@v2
       with:
         files: |
@@ -247,8 +222,8 @@ jobs:
         name: ${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_id }}
         tag_name: ${{ github.run_id }}
         body: |
-          Manifest: ${{ github.event.inputs.MANIFEST_BRANCH }}
-          Device: ${{ github.event.inputs.DEVICE_NAME }}
-          Target: ${{ github.event.inputs.BUILD_TARGET }}.img
+          清单分支：${{ github.event.inputs.MANIFEST_BRANCH }}
+          设备名称：${{ github.event.inputs.DEVICE_NAME }}
+          构建目标：${{ github.event.inputs.BUILD_TARGET }}.img
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
