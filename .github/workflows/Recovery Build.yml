@@ -149,17 +149,17 @@ jobs:
           echo "repo sync 第一轮失败，尝试降并行度重试"
           repo sync -j1 --force-sync --no-tags --no-clone-bundle || true
         fi
-      working-directory: workspace
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
     - name: Clone device tree
       run: |
         set -e
-        echo "克隆设备树：${{ github.event.inputs.DEVICE_TREE_URL }} @ ${ { github.event.inputs.DEVICE_TREE_BRANCH }}"
+        echo "克隆设备树：${{ github.event.inputs.DEVICE_TREE_URL }} @ ${{ github.event.inputs.DEVICE_TREE_BRANCH }}"
         git clone "${{ github.event.inputs.DEVICE_TREE_URL }}" -b "${{ github.event.inputs.DEVICE_TREE_BRANCH }}" "./${{ github.event.inputs.DEVICE_PATH }}" || {
           echo "错误：克隆设备树失败（请检查 URL / 分支）。"
           exit 1
         }
-      working-directory: workspace
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
     - name: Clone common tree
       if: ${{ github.event.inputs.COMMON_TREE_URL != '' && github.event.inputs.COMMON_PATH != '' }}
@@ -168,7 +168,7 @@ jobs:
         git clone "${{ github.event.inputs.COMMON_TREE_URL }}" -b "${{ github.event.inputs.DEVICE_TREE_BRANCH }}" "./${{ github.event.inputs.COMMON_PATH }}" || {
           echo "警告：克隆 common tree 失败（若无 common tree 可忽略）"
         }
-      working-directory: workspace
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
     - name: Check Build Tree
       uses: haya14busa/action-cond@v1
@@ -188,7 +188,7 @@ jobs:
           echo "警告：scripts/convert.sh 未找到，跳过依赖转换"
         fi
         repo sync -j$(nproc --all) || repo sync -j1 || true
-      working-directory: workspace
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
       continue-on-error: true
 
     - name: Set Swap Space
@@ -219,12 +219,12 @@ jobs:
 
         make clean || true
         make "${{ github.event.inputs.BUILD_TARGET }}image" -j$(nproc --all) || { echo "构建失败，请检查日志"; exit 1; }
-      working-directory: workspace
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
     - name: Upload to Release
       uses: softprops/action-gh-release@v2
       with:
-        files: |
+        files: |6
           workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/${{ github.event.inputs.BUILD_TARGET }}.img
           workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*.zip
           workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*vendor*.img
