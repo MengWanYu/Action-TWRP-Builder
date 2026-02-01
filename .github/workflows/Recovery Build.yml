@@ -138,54 +138,72 @@ jobs:
 
       - name: 准备字体文件（修复 TWRP 字体缺失问题）
         run: |
-          # 设备树字体目录（这个目录不会被编译系统删除）
-          DEVICE_FONT_DIR="${{ steps.pwd.outputs.workspace-folder }}/${{ github.event.inputs.DEVICE_PATH }}/recovery/root/fonts"
-          
-          # 创建设备树字体目录
-          mkdir -p "$DEVICE_FONT_DIR"
-          
-          # 查找 TWRP 源码中的字体文件
-          TWRP_FONT_DIR="${{ steps.pwd.outputs.workspace-folder }}/bootable/recovery/gui/fonts"
-          
-          if [ -d "$TWRP_FONT_DIR" ]; then
-            echo "✅ 找到 TWRP 字体目录: $TWRP_FONT_DIR"
-            echo "📋 可用的字体文件:"
-            ls -la "$TWRP_FONT_DIR"
-            
-            # 复制所有 .ttf 字体文件到设备树字体目录
-            if ls "$TWRP_FONT_DIR"/*.ttf 1> /dev/null 2>&1; then
-              echo "✅ 复制字体文件到设备树目录: $DEVICE_FONT_DIR"
-              cp "$TWRP_FONT_DIR"/*.ttf "$DEVICE_FONT_DIR/"
-              
-              # 验证字体文件是否复制成功
-              echo "📋 复制后的字体文件:"
-              ls -la "$DEVICE_FONT_DIR"
-            else
-              echo "⚠️  TWRP 字体目录中没有 .ttf 文件"
-            fi
-          else
-            echo "⚠️  未找到 TWRP 字体目录: $TWRP_FONT_DIR"
-          fi
-          
-          # 最终验证：确保必需的字体文件存在
-          if [ -f "$DEVICE_FONT_DIR/Roboto-Regular.ttf" ]; then
-            echo "✅ Roboto-Regular.ttf 字体文件已就绪"
-          else
-            echo "⚠️  警告: Roboto-Regular.ttf 字体文件缺失，可能导致编译失败"
-            echo "📋 当前设备树字体目录内容:"
-            ls -la "$DEVICE_FONT_DIR" || echo "目录为空"
-          fi
-          
-          # 创建编译系统期望的中间目录（用于后续复制）
+          # 创建编译系统期望的中间目录
           FONT_INTERMEDIATES_DIR="${{ steps.pwd.outputs.workspace-folder }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/obj/PACKAGING/recovery_font_files_intermediates"
           mkdir -p "$FONT_INTERMEDIATES_DIR"
           
-          # 从设备树复制字体到中间目录
-          if [ -d "$DEVICE_FONT_DIR" ] && ls "$DEVICE_FONT_DIR"/*.ttf 1> /dev/null 2>&1; then
-            echo "✅ 从设备树复制字体到中间目录: $FONT_INTERMEDIATES_DIR"
-            cp "$DEVICE_FONT_DIR"/*.ttf "$FONT_INTERMEDIATES_DIR/"
-            echo "📋 中间目录内容:"
-            ls -la "$FONT_INTERMEDIATES_DIR"
+          echo "📋 字体中间目录: $FONT_INTERMEDIATES_DIR"
+          
+          # 查找 TWRP 源码中所有可能的字体文件位置
+          FONT_SEARCH_PATHS=(
+            "${{ steps.pwd.outputs.workspace-folder }}/bootable/recovery/gui/fonts"
+            "${{ steps.pwd.outputs.workspace-folder }}/bootable/recovery/gui/themes/fonts"
+            "${{ steps.pwd.outputs.workspace-folder }}/bootable/recovery/gui/fonts/roboto"
+            "${{ steps.pwd.outputs.workspace-folder }}/external/noto-fonts"
+            "${{ steps.pwd.outputs.workspace-folder }}/frameworks/base/data/fonts"
+          )
+          
+          FOUND_FONT=false
+          for font_dir in "${FONT_SEARCH_PATHS[@]}"; do
+            if [ -d "$font_dir" ]; then
+              echo "✅ 搜索目录: $font_dir"
+              # 查找所有TTF字体文件
+              while IFS= read -r -d '' font_file; do
+                echo "  找到字体: $(basename "$font_file")"
+                # 复制到中间目录，如果目标文件已存在则跳过
+                if [ ! -f "$FONT_INTERMEDIATES_DIR/$(basename "$font_file")" ]; then
+                  cp "$font_file" "$FONT_INTERMEDIATES_DIR/"
+                  echo "    ✅ 已复制"
+                else
+                  echo "    ⏭️  已存在，跳过"
+                fi
+                FOUND_FONT=true
+              done < <(find "$font_dir" -type f -name "*.ttf" -print0)
+            fi
+          done
+          
+          # 如果没有找到字体，从AOSP字体仓库下载
+          if [ "$FOUND_FONT" = false ]; then
+            echo "⚠️  未在源码中找到字体文件，尝试下载..."
+            # 使用wget下载Roboto字体（如果可用）
+            if command -v wget &> /dev/null; then
+              wget -q -O "$FONT_INTERMEDIATES_DIR/Roboto-Regular.ttf" "https://fonts.gstatic.com/s/roboto/v30/KFOmCnqEu92Fr1Mu4mxK.woff2" 2>/dev/null || echo "    ❌ 下载失败"
+              # 如果woff2下载成功，尝试转换或直接使用
+              if [ -f "$FONT_INTERMEDIATES_DIR/Roboto-Regular.woff2" ]; then
+                mv "$FONT_INTERMEDIATES_DIR/Roboto-Regular.woff2" "$FONT_INTERMEDIATES_DIR/Roboto-Regular.ttf"
+                echo "    ✅ 下载成功（woff2格式）"
+                FOUND_FONT=true
+              fi
+            fi
+          fi
+          
+          echo ""
+          echo "📋 字体中间目录最终内容:"
+          ls -lh "$FONT_INTERMEDIATES_DIR" || echo "目录为空"
+          
+          # 创建符号链接或复制任何可用的字体文件作为Roboto-Regular
+          if [ -f "$FONT_INTERMEDIATES_DIR/Roboto-Regular.ttf" ]; then
+            echo "✅ Roboto-Regular.ttf 已就绪"
+          else
+            # 查找任何可用的TTF文件并复制为Roboto-Regular
+            ANY_FONT=$(find "$FONT_INTERMEDIATES_DIR" -type f -name "*.ttf" | head -1)
+            if [ -n "$ANY_FONT" ]; then
+              echo "⚠️  未找到Roboto-Regular.ttf，使用 $ANY_FONT"
+              cp "$ANY_FONT" "$FONT_INTERMEDIATES_DIR/Roboto-Regular.ttf"
+              echo "✅ 已创建Roboto-Regular.ttf"
+            else
+              echo "❌ 警告: 无法找到任何字体文件！"
+            fi
           fi
         working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
