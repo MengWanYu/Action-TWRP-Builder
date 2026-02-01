@@ -136,6 +136,36 @@ jobs:
         working-directory: ${{ steps.pwd.outputs.workspace-folder }}
         continue-on-error: true
 
+      - name: 准备字体文件（修复 TWRP 字体缺失问题）
+        run: |
+          # 检查设备树是否有字体目录
+          FONT_DIR="${{ steps.pwd.outputs.workspace-folder }}/${{ github.event.inputs.DEVICE_PATH }}/recovery/root/fonts"
+          
+          if [ ! -d "$FONT_DIR" ]; then
+            echo "⚠️  字体目录不存在，创建字体目录和符号链接"
+            mkdir -p "$FONT_DIR"
+            
+            # 从 TWRP 源码复制字体文件或创建符号链接
+            # TWRP 通常在 bootable/recovery/gui/fonts 目录下有字体文件
+            TWRP_FONT_DIR="${{ steps.pwd.outputs.workspace-folder }}/bootable/recovery/gui/fonts"
+            
+            if [ -d "$TWRP_FONT_DIR" ]; then
+              echo "✅ 找到 TWRP 字体目录，复制字体文件"
+              cp "$TWRP_FONT_DIR"/*.ttf "$FONT_DIR/" 2>/dev/null || echo "⚠️  未找到 .ttf 字体文件"
+            else
+              echo "⚠️  未找到 TWRP 字体目录"
+            fi
+            
+            # 如果仍然没有字体文件，创建一个空的字体文件来避免编译错误
+            if [ -z "$(ls -A $FONT_DIR 2>/dev/null)" ]; then
+              echo "⚠️  创建空的字体文件避免编译错误"
+              touch "$FONT_DIR/.gitkeep"
+            fi
+          else
+            echo "✅ 字体目录已存在"
+          fi
+        working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+
       # 修复核心：将环境准备步骤移到「源码同步+设备树克隆之后」，避免路径不存在报错
       - name: 准备编译环境（安装依赖+配置zopflipng）
         run: |
