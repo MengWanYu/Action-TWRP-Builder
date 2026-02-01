@@ -192,13 +192,17 @@ jobs:
           
           # 关键：给构建系统创建zopflipng软链接（ninja仅识别out目录下的工具）
           LINK_PATH="${{ steps.pwd.outputs.workspace-folder }}/out/host/linux-x86/bin/zopflipng"
-          if [ -d "$(dirname $LINK_PATH)" ]; then
-            sudo ln -sf /usr/bin/zopflipng $LINK_PATH
-            echo "✅ 已创建zopflipng软链接：$LINK_PATH"
-          else
-            echo "❌ 构建目录不存在：$(dirname $LINK_PATH)"
-            exit 1
+          LINK_DIR="$(dirname $LINK_PATH)"
+          
+          # 创建目标目录（如果不存在）
+          if [ ! -d "$LINK_DIR" ]; then
+            mkdir -p "$LINK_DIR"
+            echo "✅ 已创建目录：$LINK_DIR"
           fi
+          
+          # 创建软链接
+          sudo ln -sf /usr/bin/zopflipng $LINK_PATH
+          echo "✅ 已创建zopflipng软链接：$LINK_PATH"
           
           make ${{ github.event.inputs.BUILD_TARGET }}image -j$(nproc --all)  # 开始编译
         working-directory: ${{ steps.pwd.outputs.workspace-folder }}
