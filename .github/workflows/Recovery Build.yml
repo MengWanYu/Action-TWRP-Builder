@@ -189,6 +189,41 @@ jobs:
           fi
         working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
+      - name: 配置 BoardConfig.mk 字体路径（根治方案）
+        run: |
+          # 设备树路径
+          DEVICE_PATH="${{ github.event.inputs.DEVICE_PATH }}"
+          
+          # 查找 BoardConfig.mk 文件
+          BOARDCONFIG_FILE="${{ steps.pwd.outputs.workspace-folder }}/${DEVICE_PATH}/BoardConfig.mk"
+          
+          if [ -f "$BOARDCONFIG_FILE" ]; then
+            echo "✅ 找到 BoardConfig.mk: $BOARDCONFIG_FILE"
+            
+            # 检查是否已经配置了 RECOVERY_FONT_PATH
+            if grep -q "RECOVERY_FONT_PATH" "$BOARDCONFIG_FILE"; then
+              echo "⚠️  BoardConfig.mk 中已存在 RECOVERY_FONT_PATH 配置，跳过添加"
+              echo "📋 当前的 RECOVERY_FONT_PATH 配置:"
+              grep "RECOVERY_FONT_PATH" "$BOARDCONFIG_FILE"
+            else
+              echo "✅ 添加 RECOVERY_FONT_PATH 配置到 BoardConfig.mk"
+              
+              # 添加字体路径配置到文件末尾
+              echo "" >> "$BOARDCONFIG_FILE"
+              echo "# TWRP 字体配置（自动添加）" >> "$BOARDCONFIG_FILE"
+              echo "RECOVERY_FONT_PATH := \$(DEVICE_PATH)/recovery/root/fonts/Roboto-Regular.ttf" >> "$BOARDCONFIG_FILE"
+              
+              echo "✅ 字体路径配置已添加"
+              echo "📋 BoardConfig.mk 末尾内容:"
+              tail -n 5 "$BOARDCONFIG_FILE"
+            fi
+          else
+            echo "⚠️  未找到 BoardConfig.mk 文件: $BOARDCONFIG_FILE"
+            echo "📋 设备树目录内容:"
+            ls -la "${{ steps.pwd.outputs.workspace-folder }}/${DEVICE_PATH}/" || echo "目录不存在"
+          fi
+        working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+
       # 修复核心：将环境准备步骤移到「源码同步+设备树克隆之后」，避免路径不存在报错
       - name: 准备编译环境（安装依赖+配置zopflipng）
         run: |
