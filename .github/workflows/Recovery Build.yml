@@ -103,6 +103,7 @@ jobs:
         curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
         chmod a+x ~/bin/repo
         sudo ln -sf ~/bin/repo /usr/bin/repo
+        sudo apt update && sudo apt install zopflipng -y
 
     - name: Initialize repo
       run: |
