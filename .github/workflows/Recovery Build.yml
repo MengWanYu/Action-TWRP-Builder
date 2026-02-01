@@ -138,97 +138,87 @@ jobs:
 
       - name: 准备字体文件（修复 TWRP 字体缺失问题）
         run: |
-          # 创建编译系统期望的中间目录
-          FONT_INTERMEDIATES_DIR="${{ steps.pwd.outputs.workspace-folder }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/obj/PACKAGING/recovery_font_files_intermediates"
-          mkdir -p "$FONT_INTERMEDIATES_DIR"
+          # 创建多个编译系统可能查找的字体目录
+          FONT_DIRS=(
+            "${{ steps.pwd.outputs.workspace-folder }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/obj/PACKAGING/recovery_font_files_intermediates"
+            "${{ steps.pwd.outputs.workspace-folder }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/obj/ETC/recovery_font_files_intermediates"
+            "${{ steps.pwd.outputs.workspace-folder }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/system/fonts"
+            "${{ steps.pwd.outputs.workspace-folder }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/recovery/root/fonts"
+          )
           
-          echo "📋 字体中间目录: $FONT_INTERMEDIATES_DIR"
+          for font_dir in "${FONT_DIRS[@]}"; do
+            mkdir -p "$font_dir"
+            echo "✅ 创建目录: $font_dir"
+          done
           
-          # 步骤1: 优先从设备树中复制字体文件
+          # 从设备树复制字体文件
           DEVICE_FONT_DIR="${{ steps.pwd.outputs.workspace-folder }}/${{ github.event.inputs.DEVICE_PATH }}/recovery/root/fonts"
-          if [ -d "$DEVICE_FONT_DIR" ]; then
-            echo "✅ 检查设备树字体目录: $DEVICE_FONT_DIR"
-            echo "📋 设备树字体文件:"
-            ls -lh "$DEVICE_FONT_DIR"
+          if [ -f "$DEVICE_FONT_DIR/Roboto-Regular.ttf" ]; then
+            file_type=$(file -b "$DEVICE_FONT_DIR/Roboto-Regular.ttf")
+            echo "✅ 找到设备树字体: $file_type"
             
-            # 验证字体文件是否为真正的TTF文件
-            if [ -f "$DEVICE_FONT_DIR/Roboto-Regular.ttf" ]; then
-              file_type=$(file -b "$DEVICE_FONT_DIR/Roboto-Regular.ttf")
-              echo "🔍 字体文件类型: $file_type"
-              
-              if [[ "$file_type" == *"TrueType font"* ]] || [[ "$file_type" == *"font data"* ]]; then
-                echo "✅ 发现有效的TrueType字体文件"
-                cp "$DEVICE_FONT_DIR/Roboto-Regular.ttf" "$FONT_INTERMEDIATES_DIR/"
-                FOUND_FONT=true
-                echo "✅ 已从设备树复制Roboto-Regular.ttf"
-              else
-                echo "⚠️  设备树字体文件不是有效的TrueType字体: $file_type"
-                FOUND_FONT=false
-              fi
-            else
-              echo "⚠️  设备树中没有Roboto-Regular.ttf"
-              FOUND_FONT=false
-            fi
-          else
-            echo "⚠️  设备树字体目录不存在: $DEVICE_FONT_DIR"
-            FOUND_FONT=false
-          fi
-          
-          # 步骤2: 如果设备树中没有有效字体，从TWRP源码中搜索
-          if [ "$FOUND_FONT" = false ]; then
-            echo ""
-            echo "🔍 从TWRP源码中搜索字体文件..."
-            
-            # 查找 TWRP 源码中所有可能的字体文件位置
-            FONT_SEARCH_PATHS=(
-              "${{ steps.pwd.outputs.workspace-folder }}/bootable/recovery/gui/fonts"
-              "${{ steps.pwd.outputs.workspace-folder }}/bootable/recovery/gui/themes/fonts"
-              "${{ steps.pwd.outputs.workspace-folder }}/bootable/recovery/gui/fonts/roboto"
-              "${{ steps.pwd.outputs.workspace-folder }}/external/noto-fonts"
-              "${{ steps.pwd.outputs.workspace-folder }}/frameworks/base/data/fonts"
-            )
-            
-            for font_dir in "${FONT_SEARCH_PATHS[@]}"; do
-              if [ -d "$font_dir" ]; then
-                echo "✅ 搜索目录: $font_dir"
-                # 查找所有TTF字体文件
-                while IFS= read -r -d '' font_file; do
-                  font_name=$(basename "$font_file")
-                  echo "  找到字体: $font_name"
-                  # 复制到中间目录，如果目标文件已存在则跳过
-                  if [ ! -f "$FONT_INTERMEDIATES_DIR/$font_name" ]; then
-                    cp "$font_file" "$FONT_INTERMEDIATES_DIR/"
-                    echo "    ✅ 已复制"
-                  else
-                    echo "    ⏭️  已存在，跳过"
-                  fi
-                  FOUND_FONT=true
-                done < <(find "$font_dir" -type f -name "*.ttf" -print0)
-              fi
+            # 复制到所有可能的字体目录
+            for font_dir in "${FONT_DIRS[@]}"; do
+              cp "$DEVICE_FONT_DIR/Roboto-Regular.ttf" "$font_dir/"
+              echo "✅ 复制到: $font_dir"
             done
-          fi
-          
-          # 步骤3: 最终验证和确保Roboto-Regular.ttf存在
-          echo ""
-          echo "📋 字体中间目录最终内容:"
-          ls -lh "$FONT_INTERMEDIATES_DIR" || echo "目录为空"
-          
-          if [ -f "$FONT_INTERMEDIATES_DIR/Roboto-Regular.ttf" ]; then
-            file_type=$(file -b "$FONT_INTERMEDIATES_DIR/Roboto-Regular.ttf")
-            echo "✅ Roboto-Regular.ttf 已就绪 ($file_type)"
+            
+            # 创建额外的符号链接和副本
+            PRIMARY_FONT_DIR="${{ steps.pwd.outputs.workspace-folder }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/obj/PACKAGING/recovery_font_files_intermediates"
+            cd "$PRIMARY_FONT_DIR"
+            
+            # 创建多个可能的字体文件名
+            cp Roboto-Regular.ttf Roboto-Regular-en.ttf
+            cp Roboto-Regular.ttf roboto-regular.ttf
+            cp Roboto-Regular.ttf Roboto_Regular.ttf
+            cp Roboto-Regular.ttf roboto_regular.ttf
+            
+            # 创建语言特定的字体文件
+            cp Roboto-Regular.ttf Roboto-Regular_zh_CN.ttf
+            cp Roboto-Regular.ttf Roboto-Regular_zh_TW.ttf
+            
+            echo "✅ 字体文件准备完成"
+            echo "📋 主要字体目录内容:"
+            ls -lh "$PRIMARY_FONT_DIR"
           else
-            echo "⚠️  Roboto-Regular.ttf 不存在，尝试创建..."
-            # 查找任何可用的TTF文件并复制为Roboto-Regular
-            ANY_FONT=$(find "$FONT_INTERMEDIATES_DIR" -type f -name "*.ttf" | head -1)
-            if [ -n "$ANY_FONT" ]; then
-              echo "  使用 $ANY_FONT 作为 Roboto-Regular.ttf"
-              cp "$ANY_FONT" "$FONT_INTERMEDIATES_DIR/Roboto-Regular.ttf"
-              echo "✅ 已创建Roboto-Regular.ttf"
-            else
-              echo "❌ 严重错误: 无法找到任何字体文件！编译将失败。"
-              exit 1
-            fi
+            echo "❌ 错误: 设备树中没有找到Roboto-Regular.ttf"
+            exit 1
           fi
+        working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+
+      - name: 禁用文本图片生成（绕过字体依赖）
+        run: |
+          # 修改TWRP编译配置，禁用文本图片生成
+          RECOVERY_MAKEFILE="${{ steps.pwd.outputs.workspace-folder }}/bootable/recovery/gui/Android.mk"
+          
+          if [ -f "$RECOVERY_MAKEFILE" ]; then
+            echo "✅ 找到 recovery/gui/Android.mk"
+            
+            # 查找并注释掉文本图片生成的规则
+            if grep -q "recovery_text_res" "$RECOVERY_MAKEFILE"; then
+              echo "✅ 找到文本图片生成规则，禁用中..."
+              
+              # 创建备份
+              cp "$RECOVERY_MAKEFILE" "$RECOVERY_MAKEFILE.backup"
+              
+              # 注释掉文本图片生成的规则
+              sed -i '/recovery_text_res_intermediates/s/^/# DISABLED: /' "$RECOVERY_MAKEFILE"
+              sed -i '/RecoveryImageGenerator.jar/s/^/# DISABLED: /' "$RECOVERY_MAKEFILE"
+              sed -i '/wipe_data/s/^/# DISABLED: /' "$RECOVERY_MAKEFILE"
+              
+              echo "✅ 已禁用文本图片生成规则"
+            else
+              echo "⚠️  未找到文本图片生成规则"
+            fi
+          else
+            echo "⚠️  未找到 $RECOVERY_MAKEFILE"
+          fi
+          
+          # 尝试通过环境变量禁用
+          echo "export RECOVERY_SKIP_TEXT_IMAGE_GENERATION=true" >> ~/.bashrc
+          echo "export TW_SKIP_TEXT_IMAGE_GENERATION=true" >> ~/.bashrc
+          
+          echo "✅ 禁用文本图片生成配置完成"
         working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
       - name: 配置 BoardConfig.mk 字体路径（根治方案）
@@ -242,27 +232,17 @@ jobs:
           if [ -f "$BOARDCONFIG_FILE" ]; then
             echo "✅ 找到 BoardConfig.mk: $BOARDCONFIG_FILE"
             
-            # 检查是否已经配置了 RECOVERY_FONT_PATH
-            if grep -q "RECOVERY_FONT_PATH" "$BOARDCONFIG_FILE"; then
-              echo "⚠️  BoardConfig.mk 中已存在 RECOVERY_FONT_PATH 配置，跳过添加"
-              echo "📋 当前的 RECOVERY_FONT_PATH 配置:"
-              grep "RECOVERY_FONT_PATH" "$BOARDCONFIG_FILE"
-            else
-              echo "✅ 添加 RECOVERY_FONT_PATH 配置到 BoardConfig.mk"
-              
-              # 添加字体路径配置到文件末尾
+            # 确保有禁用文本图片生成的配置
+            if ! grep -q "RECOVERY_SKIP_TEXT_IMAGE_GENERATION" "$BOARDCONFIG_FILE"; then
+              echo "✅ 添加 RECOVERY_SKIP_TEXT_IMAGE_GENERATION 配置"
               echo "" >> "$BOARDCONFIG_FILE"
-              echo "# TWRP 字体配置（自动添加）" >> "$BOARDCONFIG_FILE"
-              echo "RECOVERY_FONT_PATH := \$(DEVICE_PATH)/recovery/root/fonts/Roboto-Regular.ttf" >> "$BOARDCONFIG_FILE"
-              
-              echo "✅ 字体路径配置已添加"
-              echo "📋 BoardConfig.mk 末尾内容:"
-              tail -n 5 "$BOARDCONFIG_FILE"
+              echo "# 禁用recovery界面文本图片生成，避免字体依赖" >> "$BOARDCONFIG_FILE"
+              echo "RECOVERY_SKIP_TEXT_IMAGE_GENERATION := true" >> "$BOARDCONFIG_FILE"
+            else
+              echo "✅ 已存在 RECOVERY_SKIP_TEXT_IMAGE_GENERATION 配置"
             fi
           else
-            echo "⚠️  未找到 BoardConfig.mk 文件: $BOARDCONFIG_FILE"
-            echo "📋 设备树目录内容:"
-            ls -la "${{ steps.pwd.outputs.workspace-folder }}/${DEVICE_PATH}/" || echo "目录不存在"
+            echo "⚠️  未找到 BoardConfig.mk 文件"
           fi
         working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
