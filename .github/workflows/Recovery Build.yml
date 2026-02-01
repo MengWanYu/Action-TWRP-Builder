@@ -73,10 +73,19 @@ jobs:
 
     - name: Prepare the environment
       run: |
-        wget https://github.com/imagemin/zopflipng-bin/raw/main/vendor/linux/x64/zopflipng
-        chmod +x zopflipng
-        sudo mv zopflipng /usr/bin/
-        zopflipng --version
+        sudo rm -f /usr/bin/zopflipng
+        sudo apt update && sudo apt install -y git build-essential cmake libpng-dev
+        git clone https://github.com/google/zopfli.git --depth 1 && cd zopfli
+        mkdir -p build && cd build
+        cmake .. -DCMAKE_BUILD_TYPE=Release
+        make -j$(nproc --all)
+        sudo cp src/zopflipng /usr/bin/
+        if zopflipng --version; then
+          echo "zopflipng安装成功！
+        else
+          echo "安装失败，退出构建"
+          exit 1
+        fi
         
         sudo apt update && sudo apt upgrade -y
         DEBIAN_FRONTEND=noninteractive sudo apt install -yq \
