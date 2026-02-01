@@ -132,9 +132,30 @@ jobs:
         git clone ${{ github.event.inputs.COMMON_TREE_URL }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.COMMON_PATH }}
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
+    - name: Check build tree type
+      uses: haya14busa/action-cond@v1
+      id: buildtree
+      with:
+        cond: ${{ github.event.inputs.MANIFEST_BRANCH == 'twrp-11' || github.event.inputs.MANIFEST_BRANCH == 'twrp-12.1' }}
+        if_true: twrp
+        if_false: omni
+
     - name: Sync Device Dependencies
       run: |
-        bash ${GITHUB_WORKSPACE}/scripts/convert.sh ${{ github.event.inputs.DEVICE_PATH }}/${{ steps.buildtree.outputs.value }}.dependencies
+        DEPS_FILE="${{ github.event.inputs.DEVICE_PATH }}/${{ steps.buildtree.outputs.value }}.dependencies"
+        SCRIPT_PATH="${GITHUB_WORKSPACE}/scripts/convert.sh"
+        echo "=== Debug Info ==="
+        echo "Working Directory: $(pwd)"
+        echo "Script Path: $SCRIPT_PATH"
+        echo "Dependencies File: $DEPS_FILE"
+        echo "Build Tree Type: ${{ steps.buildtree.outputs.value }}"
+        echo "Dependencies File Exists: [ -f ${DEPS_FILE} ] && echo 'Exists' || echo 'Not Found'"
+        echo "=================="
+        if [ -f "$DEPS_FILE" ]; then
+          bash "$SCRIPT_PATH" "$DEPS_FILE"
+        else
+          echo "⚠️  Dependencies file not found, skipping conversion: $DEPS_FILE"
+        fi
         repo sync -j$(nproc --all)
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
       continue-on-error: true

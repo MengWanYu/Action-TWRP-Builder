@@ -118,7 +118,20 @@ jobs:
 
       - name: 同步设备依赖
         run: |
-          bash ${GITHUB_WORKSPACE}/scripts/convert.sh ${{ github.event.inputs.DEVICE_PATH }}/${{ steps.buildtree.outputs.value }}.dependencies
+          DEPS_FILE="${{ github.event.inputs.DEVICE_PATH }}/${{ steps.buildtree.outputs.value }}.dependencies"
+          SCRIPT_PATH="${GITHUB_WORKSPACE}/scripts/convert.sh"
+          echo "=== 调试信息 ==="
+          echo "工作目录: $(pwd)"
+          echo "脚本路径: $SCRIPT_PATH"
+          echo "依赖文件: $DEPS_FILE"
+          echo "构建树类型: ${{ steps.buildtree.outputs.value }}"
+          echo "依赖文件是否存在: [ -f ${DEPS_FILE} ] && echo '存在' || echo '不存在'"
+          echo "================"
+          if [ -f "$DEPS_FILE" ]; then
+            bash "$SCRIPT_PATH" "$DEPS_FILE"
+          else
+            echo "⚠️  依赖文件不存在，跳过转换: $DEPS_FILE"
+          fi
           repo sync -j$(nproc --all)
         working-directory: ${{ steps.pwd.outputs.workspace-folder }}
         continue-on-error: true
