@@ -138,11 +138,11 @@ jobs:
 
       - name: 准备字体文件（修复 TWRP 字体缺失问题）
         run: |
-          # 编译系统期望的字体文件中间目录
-          FONT_INTERMEDIATES_DIR="${{ steps.pwd.outputs.workspace-folder }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/obj/PACKAGING/recovery_font_files_intermediates"
+          # 设备树字体目录（这个目录不会被编译系统删除）
+          DEVICE_FONT_DIR="${{ steps.pwd.outputs.workspace-folder }}/${{ github.event.inputs.DEVICE_PATH }}/recovery/root/fonts"
           
-          # 创建字体文件中间目录
-          mkdir -p "$FONT_INTERMEDIATES_DIR"
+          # 创建设备树字体目录
+          mkdir -p "$DEVICE_FONT_DIR"
           
           # 查找 TWRP 源码中的字体文件
           TWRP_FONT_DIR="${{ steps.pwd.outputs.workspace-folder }}/bootable/recovery/gui/fonts"
@@ -152,14 +152,14 @@ jobs:
             echo "📋 可用的字体文件:"
             ls -la "$TWRP_FONT_DIR"
             
-            # 复制所有 .ttf 字体文件到中间目录
+            # 复制所有 .ttf 字体文件到设备树字体目录
             if ls "$TWRP_FONT_DIR"/*.ttf 1> /dev/null 2>&1; then
-              echo "✅ 复制字体文件到: $FONT_INTERMEDIATES_DIR"
-              cp "$TWRP_FONT_DIR"/*.ttf "$FONT_INTERMEDIATES_DIR/"
+              echo "✅ 复制字体文件到设备树目录: $DEVICE_FONT_DIR"
+              cp "$TWRP_FONT_DIR"/*.ttf "$DEVICE_FONT_DIR/"
               
               # 验证字体文件是否复制成功
               echo "📋 复制后的字体文件:"
-              ls -la "$FONT_INTERMEDIATES_DIR"
+              ls -la "$DEVICE_FONT_DIR"
             else
               echo "⚠️  TWRP 字体目录中没有 .ttf 文件"
             fi
@@ -167,24 +167,25 @@ jobs:
             echo "⚠️  未找到 TWRP 字体目录: $TWRP_FONT_DIR"
           fi
           
-          # 检查是否还需要为设备树创建字体目录（某些设备可能需要）
-          DEVICE_FONT_DIR="${{ steps.pwd.outputs.workspace-folder }}/${{ github.event.inputs.DEVICE_PATH }}/recovery/root/fonts"
-          if [ ! -d "$DEVICE_FONT_DIR" ]; then
-            echo "📝 创建设备树字体目录: $DEVICE_FONT_DIR"
-            mkdir -p "$DEVICE_FONT_DIR"
-            # 从中间目录复制字体文件到设备树
-            if [ -d "$FONT_INTERMEDIATES_DIR" ] && ls "$FONT_INTERMEDIATES_DIR"/*.ttf 1> /dev/null 2>&1; then
-              cp "$FONT_INTERMEDIATES_DIR"/*.ttf "$DEVICE_FONT_DIR/"
-            fi
-          fi
-          
           # 最终验证：确保必需的字体文件存在
-          if [ -f "$FONT_INTERMEDIATES_DIR/Roboto-Regular.ttf" ]; then
+          if [ -f "$DEVICE_FONT_DIR/Roboto-Regular.ttf" ]; then
             echo "✅ Roboto-Regular.ttf 字体文件已就绪"
           else
             echo "⚠️  警告: Roboto-Regular.ttf 字体文件缺失，可能导致编译失败"
-            echo "📋 当前中间目录内容:"
-            ls -la "$FONT_INTERMEDIATES_DIR" || echo "目录为空"
+            echo "📋 当前设备树字体目录内容:"
+            ls -la "$DEVICE_FONT_DIR" || echo "目录为空"
+          fi
+          
+          # 创建编译系统期望的中间目录（用于后续复制）
+          FONT_INTERMEDIATES_DIR="${{ steps.pwd.outputs.workspace-folder }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/obj/PACKAGING/recovery_font_files_intermediates"
+          mkdir -p "$FONT_INTERMEDIATES_DIR"
+          
+          # 从设备树复制字体到中间目录
+          if [ -d "$DEVICE_FONT_DIR" ] && ls "$DEVICE_FONT_DIR"/*.ttf 1> /dev/null 2>&1; then
+            echo "✅ 从设备树复制字体到中间目录: $FONT_INTERMEDIATES_DIR"
+            cp "$DEVICE_FONT_DIR"/*.ttf "$FONT_INTERMEDIATES_DIR/"
+            echo "📋 中间目录内容:"
+            ls -la "$FONT_INTERMEDIATES_DIR"
           fi
         working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
