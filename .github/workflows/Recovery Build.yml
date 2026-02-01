@@ -73,27 +73,29 @@ jobs:
 
     - name: Prepare the environment
       run: |
-        # 1. 清理之前的残留，避免冲突
+        # 1. 彻底清理残留，避免旧文件干扰
         sudo rm -rf zopfli /usr/bin/zopflipng
-        # 2. 重新克隆+编译（步骤不变，只改最后复制路径）
-        git clone https://github.com/google/zopfli.git --depth 1 && cd zopfli
-        mkdir -p build && cd build
+        # 2. 克隆源码+编译（全程固定路径，不迷路）
+        git clone https://github.com/google/zopfli.git --depth 1
+        cd zopfli/build 2>/dev/null || mkdir -p zopfli/build && cd zopfli/build  # 确保进入build目录
         cmake .. -DCMAKE_BUILD_TYPE=Release
         make -j$(nproc --all)
-        # 3. 关键修正：正确的文件路径（编译后在 build/src/zopflipng 目录下）
-        # 先验证文件是否存在，避免报错
-        if [ -f "src/zopflipng/zopflipng" ]; then
-          sudo cp src/zopflipng/zopflipng /usr/bin/
-        elif [ -f "src/zopflipng" ]; then
-          sudo cp src/zopflipng /usr/bin/
+        # 3. 关键修正：zopflipng直接在build目录下（日志已确认编译成功）
+        if [ -f "./zopflipng" ]; then
+         sudo cp ./zopflipng /usr/bin/  # 直接复制当前目录的zopflipng
+        echo "zopflipng文件找到并复制成功！"
         else
-          # 找不到文件时输出提示，方便排查
-          echo "编译后的 zopflipng 位置："
-          ls -l src/  # 列出 src 目录内容，确认文件位置
+        echo "错误：build目录下未找到zopflipng，当前目录内容："
+        ls -l ./  # 列出build目录所有文件，方便排查
+         exit 1
+         fi
+        # 4. 验证安装（确保工具可用）
+        if zopflipng --version; then
+        echo "✅ zopflipng安装完成，可正常使用！"
+        else
+         echo "❌ zopflipng安装失败"
           exit 1
-        fi
-        # 4. 验证安装
-        zopflipng --version && echo "zopflipng 安装成功！"
+         fi
         
         sudo apt update && sudo apt upgrade -y
         DEBIAN_FRONTEND=noninteractive sudo apt install -yq \
