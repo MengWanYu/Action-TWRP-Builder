@@ -96,6 +96,8 @@ jobs:
          echo "❌ zopflipng安装失败"
           exit 1
          fi
+        sudo ln -sf /usr/bin/zopflipng /home/runner/work/Action-TWRP-Builder/Action-TWRP-Builder/workspace/out/host/linux-x86/bin/zopflipng
+        ls -l /home/runner/work/Action-TWRP-Builder/Action-TWRP-Builder/workspace/out/host/linux-x86/bin/zopflipng
         
         sudo apt update && sudo apt upgrade -y
         DEBIAN_FRONTEND=noninteractive sudo apt install -yq \
