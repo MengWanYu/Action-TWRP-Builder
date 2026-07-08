@@ -116,6 +116,19 @@ jobs:
           if_true: twrp
           if_false: omni
 
+      - name: 应用OTA保护local manifest
+        run: |
+          MANIFEST_FILE="${{ github.event.inputs.DEVICE_PATH }}/ota_protection/local_manifest.xml"
+          if [ -f "$MANIFEST_FILE" ]; then
+            echo "OTA protection manifest found, applying override..."
+            mkdir -p .repo/local_manifests
+            cp "$MANIFEST_FILE" .repo/local_manifests/ota_protection.xml
+            echo "Override applied: bootable/recovery -> MengWanYu/android_bootable_recovery"
+          else
+            echo "No OTA protection manifest, using default sources"
+          fi
+        working-directory: ${{ steps.pwd.outputs.workspace-folder }}
+
       - name: 同步设备依赖
         run: |
           DEPS_FILE="${{ github.event.inputs.DEVICE_PATH }}/${{ steps.buildtree.outputs.value }}.dependencies"
