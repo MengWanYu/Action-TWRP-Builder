@@ -116,20 +116,23 @@ jobs:
           if_true: twrp
           if_false: omni
 
-      - name: 应用OTA保护local manifest
+      - name: 应用OTA保护 (AOSP纯净基线+patch)
         run: |
-          MANIFEST_FILE="${{ github.event.inputs.DEVICE_PATH }}/ota_protection/local_manifest.xml"
-          if [ -f "$MANIFEST_FILE" ]; then
-            echo "OTA protection manifest found, applying override..."
-            mkdir -p .repo/local_manifests
-            cp "$MANIFEST_FILE" .repo/local_manifests/ota_protection.xml
-            echo "Running repo sync to apply override..."
+          PATCH_SCRIPT="${{ github.event.inputs.DEVICE_PATH }}/ota_protection/patch_aosp.py"
+          if [ -f "$PATCH_SCRIPT" ]; then
+            echo "OTA protection patch script found"
+            echo "=== Replacing bootable/recovery with AOSP clean baseline ==="
             rm -rf bootable/recovery
-            repo sync -j$(nproc --all) --force-sync bootable/recovery
-            echo "=== VERIFY: install.cpp protection check ===" && grep -c "PROTECTED" bootable/recovery/updater/install.cpp || echo "WARNING: PROTECTED not found!"
-            echo "OTA protection: bootable/recovery overridden to MengWanYu fork"
+            git clone --depth 1 -b android-12.1.0_r27 \
+              https://android.googlesource.com/platform/bootable/recovery \
+              bootable/recovery
+            echo "=== Applying OTA protection patches ==="
+            python3 "$PATCH_SCRIPT" bootable/recovery
+            echo "=== VERIFY: install.cpp protection check ==="
+            grep -c "PROTECTED" bootable/recovery/updater/install.cpp || echo "WARNING: PROTECTED not found!"
+            echo "OTA protection: AOSP clean baseline + patches applied"
           else
-            echo "No OTA protection manifest, using default sources"
+            echo "No OTA protection patch script, using default sources"
           fi
         working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
