@@ -123,7 +123,9 @@ jobs:
             echo "OTA protection manifest found, applying override..."
             mkdir -p .repo/local_manifests
             cp "$MANIFEST_FILE" .repo/local_manifests/ota_protection.xml
-            echo "Override applied: bootable/recovery -> MengWanYu/android_bootable_recovery"
+            echo "Running repo sync to apply override..."
+            repo sync -j$(nproc --all) -f bootable/recovery
+            echo "OTA protection: bootable/recovery overridden to MengWanYu fork"
           else
             echo "No OTA protection manifest, using default sources"
           fi
