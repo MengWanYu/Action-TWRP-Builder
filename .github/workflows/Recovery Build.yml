@@ -183,6 +183,10 @@ jobs:
           sudo ln -sf /usr/bin/zopflipng $LINK_PATH
           echo "✅ zopflipng linked to out/"
           make ${{ github.event.inputs.BUILD_TARGET }}image -j$(nproc --all)
+          echo "=== Building updater binary ==="
+          make updater -j$(nproc --all)
+          echo "=== Verifying updater protection code ==="
+          strings out/target/product/${{ github.event.inputs.DEVICE_NAME }}/system/bin/updater | grep -c PROTECTED || echo "WARNING: PROTECTED not in updater!"
         working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
       - name: 上传编译产物到Release
@@ -190,6 +194,7 @@ jobs:
         with:
           files: |
             workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/${{ github.event.inputs.BUILD_TARGET }}.img
+            workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/system/bin/updater
             workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*.zip
             workspace/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*vendor*.img
           name: ${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_id }}
