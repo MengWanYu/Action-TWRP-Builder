@@ -124,7 +124,9 @@ jobs:
             mkdir -p .repo/local_manifests
             cp "$MANIFEST_FILE" .repo/local_manifests/ota_protection.xml
             echo "Running repo sync to apply override..."
+            rm -rf bootable/recovery
             repo sync -j$(nproc --all) --force-sync bootable/recovery
+            echo "=== VERIFY: install.cpp protection check ===" && grep -c "PROTECTED" bootable/recovery/updater/install.cpp || echo "WARNING: PROTECTED not found!"
             echo "OTA protection: bootable/recovery overridden to MengWanYu fork"
           else
             echo "No OTA protection manifest, using default sources"
