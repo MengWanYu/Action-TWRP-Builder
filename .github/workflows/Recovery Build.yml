@@ -172,6 +172,7 @@ jobs:
 
       - name: 设置交换空间
         continue-on-error: true
+        timeout-minutes: 2
         uses: pierotofy/set-swap-space@master
         with:
           swap-size-gb: 12
