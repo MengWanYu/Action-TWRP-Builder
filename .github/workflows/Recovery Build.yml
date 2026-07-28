@@ -171,6 +171,14 @@ jobs:
           sudo swapon /swapfile
           free -h
 
+      - name: 释放内存
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/local/share/powershell /usr/share/dotnet /usr/local/.ghcup /opt/hostedtoolcache/go /opt/hostedtoolcache/CodeQL
+          sudo apt-get purge -y --auto-remove azure-cli google-cloud-sdk firefox dotnet-* || true
+          sudo apt-get clean
+          df -h
+          free -h
+
       - name: 编译Recovery
         run: |
           source build/envsetup.sh
