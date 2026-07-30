@@ -141,13 +141,27 @@ jobs:
         working-directory: ${{ steps.pwd.outputs.workspace-folder }}
         continue-on-error: true
 
-      - name: 释放内存
+      - name: Cleanup (slimhub)
+        uses: rokibhasansagar/slimhub_actions@main
+
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@master
+        with:
+          swap-size-mb: 12288
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+
+      - name: Setup zram
         run: |
-          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/local/share/powershell /usr/share/dotnet /usr/local/.ghcup /opt/hostedtoolcache/go /opt/hostedtoolcache/CodeQL
-          sudo apt-get purge -y --auto-remove azure-cli google-cloud-sdk firefox dotnet-* || true
-          sudo apt-get clean
-          df -h
+          sudo apt install -y zram-tools 2>/dev/null || true
+          sudo modprobe zram 2>/dev/null || true
+          sudo sed -i 's/^#PERCENT=50/PERCENT=90/' /etc/default/zramswap 2>/dev/null || true
+          sudo sed -i 's/^#PRIORITY=100/PRIORITY=1000/' /etc/default/zramswap 2>/dev/null || true
+          sudo systemctl restart zramswap 2>/dev/null || true
           free -h
+          df -h
 
       - name: 准备编译环境
         run: |
@@ -169,16 +183,6 @@ jobs:
             xsltproc bc ccache lib32readline-dev lib32z1-dev liblz4-tool libncurses-dev libsdl1.2-dev \
             build-essential libgtk-3-dev libglu1-mesa-dev freeglut3-dev git libxml2 lzop pngcrush schedtool squashfs-tools \
             imagemagick libbz2-dev lzma ncftp qemu-user-static libstdc++-10-dev libncurses6 python3 tar
-
-      - name: 设置交换空间
-        run: |
-          sudo swapoff /swapfile 2>/dev/null || true
-          sudo rm -f /swapfile
-          sudo fallocate -l 12G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=12288
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
-          free -h
 
       - name: 编译Recovery
         run: |
