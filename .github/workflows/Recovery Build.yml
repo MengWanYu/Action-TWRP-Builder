@@ -80,7 +80,8 @@ jobs:
       - name: Maximize build space
         uses: easimon/maximize-build-space@master
         with:
-          swap-size-mb: 12288
+          root-reserve-mb: 8192
+          temp-reserve-mb: 2048
           remove-dotnet: 'true'
           remove-android: 'true'
           remove-haskell: 'true'
@@ -90,9 +91,9 @@ jobs:
         run: |
           sudo apt install -y zram-tools 2>/dev/null || true
           sudo modprobe zram 2>/dev/null || true
-          sudo sed -i 's/^#PERCENT=50/PERCENT=90/' /etc/default/zramswap 2>/dev/null || true
-          sudo sed -i 's/^#PRIORITY=100/PRIORITY=1000/' /etc/default/zramswap 2>/dev/null || true
-          sudo systemctl restart zramswap 2>/dev/null || true
+          sudo bash -c 'echo PERCENT=90 >> /etc/default/zramswap' 2>/dev/null || true
+          sudo bash -c 'echo PRIORITY=1000 >> /etc/default/zramswap' 2>/dev/null || true
+          sudo systemctl restart zramswap 2>/dev/null || zramctl 2>/dev/null || true
           free -h
           df -h
 
