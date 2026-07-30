@@ -177,13 +177,19 @@ jobs:
         run: |
           source build/envsetup.sh
           export ALLOW_MISSING_DEPENDENCIES=true
+          # Limit Go runtime memory for soong_build (single-process Go binary,
+          # peak RAM exceeds free runner's 15.6GB -> OOM kill).
+          # GOMEMLIMIT=10GiB: soft cap, Go GC aggressively above this (slow but survives).
+          # GOGC=50: trigger GC earlier than default 100.
+          export GOMEMLIMIT=10GiB
+          export GOGC=50
           lunch ${{ github.event.inputs.MAKEFILE_NAME }}-eng
           make clean
           LINK_PATH="${{ steps.pwd.outputs.workspace-folder }}/out/host/linux-x86/bin/zopflipng"
           mkdir -p "$(dirname $LINK_PATH)"
           sudo ln -sf /usr/bin/zopflipng $LINK_PATH
           echo "✅ zopflipng linked to out/"
-          make ${{ github.event.inputs.BUILD_TARGET }}image -j4
+          make ${{ github.event.inputs.BUILD_TARGET }}image -j2
         working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
       - name: 上传编译产物到Release
