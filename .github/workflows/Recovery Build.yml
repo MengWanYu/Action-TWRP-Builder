@@ -183,7 +183,7 @@ jobs:
           mkdir -p "$(dirname $LINK_PATH)"
           sudo ln -sf /usr/bin/zopflipng $LINK_PATH
           echo "✅ zopflipng linked to out/"
-          make ${{ github.event.inputs.BUILD_TARGET }}image -j$(nproc --all)
+          make ${{ github.event.inputs.BUILD_TARGET }}image -j4
         working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
       - name: 上传编译产物到Release
